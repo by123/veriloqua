@@ -1,0 +1,3 @@
+{"source": "New York", "target": "纽约", "src_lang": "en", "tgt_lang": "zh", "invariant": true}
+{"source": "OpenAPI", "target": "OpenAPI", "src_lang": "en", "tgt_lang": "zh", "invariant": true}
+{"source": "commit", "target": "提交", "src_lang": "en", "tgt_lang": "zh", "invariant": false, "domain": "software"}

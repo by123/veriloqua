@@ -1,0 +1,158 @@
+"""Zero-config LLM backend that drives a locally-installed *agent CLI* as a
+subprocess — no API key, no vendor SDK.
+
+If you have Claude Code (`claude`) or Codex (`codex`) installed and logged in, the
+engine runs medium/high by shelling out to it in headless "print" mode and reading
+the answer from stdout. Speed matters here: an agent CLI boots a full agent per call,
+so the preset disables MCP servers, project/user settings, session persistence, and
+slash commands, and caps the run to one turn — a translation needs none of that. This
+takes a `claude -p` call from ~24s down to ~8-12s. The translator system prompt is
+passed on the real `--system-prompt` channel (not concatenated into the user text),
+which also avoids the model mistaking it for a prompt-injection.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+
+from veriloqua.backends.base import LLMResponse
+from veriloqua.errors import BackendNotConfigured
+
+# Flags that strip everything a translation doesn't need, so the agent boots fast.
+_CLAUDE_FAST = [
+    "-p", "--output-format", "text",
+    "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',  # no MCP servers
+    "--setting-sources", "",                                     # no project/user settings
+    "--max-turns", "1",                                          # single turn, no tool loop
+    "--no-session-persistence",
+    "--disable-slash-commands",
+]
+
+# preset -> how to invoke it.
+#   prompt="stdin": feed the prompt on stdin (safest — no argv parsing of the text)
+#   system_flag:    put the system prompt on its own channel (None → inline it)
+PRESETS: dict[str, dict] = {
+    "claude_cli": {
+        "bin": "claude",
+        "args": _CLAUDE_FAST,
+        "model_flag": "--model",
+        "system_flag": "--system-prompt",
+        "prompt": "stdin",
+        "aliases": True,               # map model ids → claude aliases (haiku/sonnet/opus)
+        "hint": "install Claude Code and run `claude` once to log in",
+    },
+    "codex_cli": {
+        "bin": "codex",
+        "args": ["exec", "--skip-git-repo-check"],
+        "model_flag": "--model",
+        "system_flag": None,           # codex has no system-prompt flag → inline
+        "prompt": "stdin",             # codex exec reads the prompt from stdin
+        "aliases": False,              # Claude aliases (haiku/sonnet) are NOT codex models
+        "hint": "install the Codex CLI and run `codex` once to sign in",
+    },
+}
+
+DEFAULT_TIMEOUT = 120.0
+
+
+def _model_alias(model: str | None) -> str | None:
+    """Map a model id/alias to a Claude-CLI alias. Aliases resolve fast and are
+    version-stable; an unknown id returns None so the CLI uses its own default."""
+    if not model:
+        return None
+    m = model.lower()
+    if "haiku" in m:
+        return "haiku"
+    if "opus" in m:
+        return "opus"
+    if "sonnet" in m:
+        return "sonnet"
+    return None
+
+
+class CliLLMBackend:
+    def __init__(
+        self,
+        preset: str = "claude_cli",
+        *,
+        model: str | None = None,
+        binary: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+        extra_args: list[str] | None = None,
+    ) -> None:
+        spec = PRESETS.get(preset)
+        if spec is None:
+            raise BackendNotConfigured(f"unknown CLI preset '{preset}'")
+        self.preset = preset
+        self.name = preset
+        self.model = model or ""          # LLMBackend protocol wants a .model string
+        self._spec = spec
+        self._model = model               # explicit override (config.cli_model)
+        self.timeout = timeout
+        self.extra_args = extra_args or []
+        self._bin = binary or shutil.which(spec["bin"])
+        if not self._bin:
+            raise BackendNotConfigured(
+                f"'{spec['bin']}' CLI not found on PATH — {spec['hint']}, "
+                "or configure an API-key backend / use mode='fast'."
+            )
+
+    @classmethod
+    def detect(cls, *, model: str | None = None) -> CliLLMBackend | None:
+        """Return a backend for the first available agent CLI, or None."""
+        for preset, spec in PRESETS.items():
+            if shutil.which(spec["bin"]):
+                return cls(preset, model=model)
+        return None
+
+    def complete(self, system: str, user: str, *, model: str | None = None,
+                 effort: str = "high", max_tokens: int = 4096) -> LLMResponse:
+        cmd = [self._bin, *self._spec["args"], *self.extra_args]
+
+        # Model selection: an explicit cli_model wins (passed raw). Otherwise map the
+        # per-call model to a CLI alias ONLY for backends whose aliases match (Claude).
+        # For codex, "haiku"/"sonnet" are not valid models, so pass nothing → codex default.
+        if self._model:
+            alias = self._model
+        elif self._spec.get("aliases"):
+            alias = _model_alias(model)
+        else:
+            alias = None
+        if alias:
+            cmd += [self._spec["model_flag"], alias]
+
+        system_flag = self._spec.get("system_flag")
+        run_kwargs: dict = {"capture_output": True, "text": True, "timeout": self.timeout}
+        if system_flag:
+            cmd += [system_flag, system]           # system on its own channel
+            payload = user                          # only the user text is the "prompt"
+        else:
+            payload = f"{system}\n\n{user}"         # no system channel → inline it
+
+        if self._spec["prompt"] == "stdin":
+            run_kwargs["input"] = payload
+        else:
+            cmd.append(payload)
+
+        try:
+            proc = subprocess.run(cmd, **run_kwargs)  # noqa: S603
+        except FileNotFoundError as exc:
+            raise BackendNotConfigured(f"'{self._bin}' not runnable: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise BackendNotConfigured(f"{self.name} timed out after {self.timeout:.0f}s") from exc
+
+        if proc.returncode != 0:
+            err = (proc.stderr or "").strip()[:300]
+            raise BackendNotConfigured(
+                f"{self.name} exited {proc.returncode}: {err or 'no stderr'} "
+                f"— try `{self._spec['bin']} -p hi` to check your login."
+            )
+
+        text = (proc.stdout or "").strip()
+        return LLMResponse(
+            text=text,
+            input_tokens=(len(system) + len(user)) // 4,   # CLI doesn't report tokens
+            output_tokens=len(text) // 4,
+            model=alias or self.preset,
+        )

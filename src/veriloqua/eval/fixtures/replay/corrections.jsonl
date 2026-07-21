@@ -1,0 +1,5 @@
+{"id": 1, "source": "The spirit is willing but the flesh is weak", "src_lang": "en", "tgt_lang": "zh", "accepted": "心有余而力不足", "rejected": ["精神是愿意的但肉体是软弱的"], "error_type": "culture-pragmatic", "context": {"domain": "general"}}
+{"id": 2, "source": "break a leg", "src_lang": "en", "tgt_lang": "zh", "accepted": "祝你好运", "rejected": ["打断一条腿"], "error_type": "culture-pragmatic", "context": {"domain": "casual-chat"}}
+{"id": 3, "source": "the cloud", "src_lang": "en", "tgt_lang": "zh", "accepted": "云端", "rejected": ["云朵"], "error_type": "terminology", "context": {"domain": "tech"}}
+{"id": 4, "source": "it is raining cats and dogs", "src_lang": "en", "tgt_lang": "zh", "accepted": "下着倾盆大雨", "rejected": ["下着猫和狗"], "error_type": "culture-pragmatic", "context": {"domain": "casual-chat"}}
+{"id": 5, "source": "serve the party", "src_lang": "en", "tgt_lang": "es", "accepted": "atender la fiesta", "rejected": ["servir al partido"], "error_type": "ambiguity-misresolution", "context": {"domain": "hospitality"}}

@@ -1,0 +1,5 @@
+{"source": "Please confirm your booking by Friday.", "reference": "请在周五前确认您的预订。", "domain": "hospitality", "register": "formal"}
+{"source": "This medication may cause drowsiness.", "reference": "此药物可能引起嗜睡。", "domain": "medical", "register": "formal"}
+{"source": "lol that's so cursed", "reference": "哈哈这也太离谱了", "domain": "casual-chat", "register": "casual"}
+{"source": "The parties agree to indemnify each other.", "reference": "双方同意相互赔偿。", "domain": "legal", "register": "formal"}
+{"source": "Tap the gear icon to open settings.", "reference": "点击齿轮图标打开设置。", "domain": "software", "register": "consultative"}

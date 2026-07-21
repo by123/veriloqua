@@ -1,0 +1,4 @@
+{"source": "the cloud", "candidate": "云端", "human_score": 5, "domain": "tech"}
+{"source": "the cloud", "candidate": "云朵", "human_score": 1, "domain": "tech"}
+{"source": "break a leg", "candidate": "祝你好运", "human_score": 5, "domain": "casual-chat"}
+{"source": "break a leg", "candidate": "打断一条腿", "human_score": 1, "domain": "casual-chat"}

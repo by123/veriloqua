@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "veriloqua"
+version = "0.1.0"
+description = "A self-improving translation engine that understands what people really mean."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Veriloqua contributors" }]
+keywords = [
+    "translation", "localization", "i18n", "l10n", "machine-translation",
+    "llm", "self-improving", "glossary", "terminology",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Localization",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+# The ONLY required runtime dependency. `pip install veriloqua` stays a
+# seconds-long, ML-free install: fast mode + the deterministic self-learning
+# core need nothing else. Everything heavier is an opt-in extra below.
+dependencies = ["httpx>=0.24"]
+
+[project.urls]
+Homepage = "https://github.com/veriloqua/veriloqua"
+Repository = "https://github.com/veriloqua/veriloqua"
+Issues = "https://github.com/veriloqua/veriloqua/issues"
+
+[project.optional-dependencies]
+rapidfuzz = ["rapidfuzz>=3.0"]          # fuzzy SURFACING tier only (difflib fallback otherwise)
+anthropic = ["anthropic>=0.40"]         # reference LLM backend (medium/high + judge)
+openai = ["openai>=1.30"]               # alternate LLM backend + API embeddings
+google = ["google-cloud-translate>=3.0"]# supported keyed MT swap for the free endpoint
+deepl = ["deepl>=1.17"]                 # high-quality production MT swap
+embeddings = ["sentence-transformers>=2.2", "numpy>=1.23"]  # semantic recall booster
+scrub = ["spacy>=3.5"]                  # optional NER redaction before writes
+eval = ["sacrebleu>=2.3"]              # chrF gold-set metric (never a runtime path)
+cli = ["typer>=0.12", "rich>=13.0"]     # ergonomic CLI (argparse core works without it)
+mcp = ["mcp>=1.2"]                       # MCP server for Claude/Codex/Cursor/Zed clients
+all = [
+    "rapidfuzz>=3.0", "anthropic>=0.40", "openai>=1.30",
+    "sentence-transformers>=2.2", "numpy>=1.23", "typer>=0.12", "rich>=13.0",
+]
+dev = [
+    "pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4", "mypy>=1.8",
+    "rapidfuzz>=3.0",
+]
+
+[project.scripts]
+vq = "veriloqua.cli:main"
+veriloqua-mcp = "veriloqua.mcp_server:main"
+
+# Backend plugin discovery: third parties register adapters under these groups.
+[project.entry-points."veriloqua.translation_backends"]
+google_free = "veriloqua.backends.google_free:GoogleFreeBackend"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/veriloqua"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/veriloqua", "tests", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "E731"]  # long lines wrap in prose tables; lambdas are fine in tests

@@ -1,9 +1,9 @@
 """Three-stage retrieval.
 
 Stage 1 (EXACT) is a deterministic normalized-span scan over active exact-key
-spans — the ONLY tier that auto-applies and the ONLY tier that feeds the hard
-non-repeat guarantee. Stages 2 (lexical) and 3 (semantic) only SURFACE candidates
-for the prompt; they never blind-substitute and never change the guarantee, so the
+spans — the ONLY tier that auto-applies and the ONLY tier that feeds the
+deterministic reject-guard. Stages 2 (lexical) and 3 (semantic) only SURFACE candidates
+for the prompt; they never blind-substitute and never affect the guard's verdict, so the
 verdict is identical whether or not ``rapidfuzz`` / embeddings are installed.
 """
 
@@ -17,7 +17,7 @@ from veriloqua.memory.records import SCOPE_PRECEDENCE, Kind, MemoryEntry
 INJECTION_CAP = 20
 
 # lexical fuzzy backend: rapidfuzz if present, else stdlib difflib. Never feeds
-# the hard guarantee, so the choice cannot affect a Tier-1 verdict.
+# the reject-guard, so the choice cannot affect a Tier-1 verdict.
 try:  # pragma: no cover - trivial import guard
     from rapidfuzz.fuzz import token_sort_ratio as _fuzz
 
@@ -68,12 +68,31 @@ class Retrieval:
     fuzzy_backend: str = FUZZY_BACKEND
 
     def landmine(self) -> bool:
-        """A matched past correction forces escalation to high."""
+        """A matched past correction forces the deep tier of the auto cascade."""
         return bool(self.exact_corrections)
 
 
 def _scope_key(e: MemoryEntry) -> int:
     return SCOPE_PRECEDENCE.get(e.scope, 0)
+
+
+def _entry_key(e: MemoryEntry) -> tuple[str, str, str]:
+    return (e.source_norm, e.src_lang, e.tgt_lang)
+
+
+def _dedupe_highest_scope(entries: list[MemoryEntry]) -> list[MemoryEntry]:
+    """The same normalized key can exist at several scopes (user AND project AND
+    global). Inject only the highest-precedence row (user > project > global) —
+    never all of them at once."""
+    seen: set[tuple[str, str, str]] = set()
+    out: list[MemoryEntry] = []
+    for e in entries:  # callers pass these sorted by scope precedence, descending
+        k = _entry_key(e)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(e)
+    return out
 
 
 def exact_scan(entries: list[MemoryEntry], source_text: str,
@@ -92,23 +111,25 @@ def exact_scan(entries: list[MemoryEntry], source_text: str,
         else:
             if not tags_contradicted(e.context_tags, ctx):
                 corrections.append(e)
-    # highest scope precedence first, then most specific (longest) span
+    # highest scope precedence first, then most specific (longest) span; then keep
+    # only one row per key — the winning scope — instead of injecting duplicates
     locks.sort(key=lambda e: (_scope_key(e), len(e.source_norm)), reverse=True)
     corrections.sort(key=lambda e: (_scope_key(e), len(e.source_norm)), reverse=True)
-    return locks, corrections
+    return _dedupe_highest_scope(locks), _dedupe_highest_scope(corrections)
 
 
 def retrieve(entries: list[MemoryEntry], source_text: str, ctx: dict[str, str], *,
              use_fuzzy: bool = True, cutoff: float = 0.72) -> Retrieval:
     """Full retrieval for medium/high. Exact tier auto-applies; fuzzy tier surfaces."""
     locks, corrections = exact_scan(entries, source_text, ctx)
-    exact_ids = {id(e) for e in locks} | {id(e) for e in corrections}
+    # keys already covered by the exact tier (at any scope) never surface again
+    exact_keys = {_entry_key(e) for e in locks} | {_entry_key(e) for e in corrections}
 
     surfaced: list[Surfaced] = []
     if use_fuzzy:
         nsrc = normalize(source_text)
         for e in entries:
-            if id(e) in exact_ids:
+            if _entry_key(e) in exact_keys:
                 continue
             if tags_contradicted(e.context_tags, ctx):
                 continue
@@ -118,7 +139,16 @@ def retrieve(entries: list[MemoryEntry], source_text: str, ctx: dict[str, str], 
                 surfaced.append(Surfaced(entry=e, tier="lexical", similarity=sim))
         surfaced.sort(key=lambda s: (s.similarity * s.entry.weight(), _scope_key(s.entry)),
                       reverse=True)
-        surfaced = surfaced[:INJECTION_CAP]
+        # one row per key here too: the best-scoring scope wins
+        seen: set[tuple[str, str, str]] = set()
+        deduped: list[Surfaced] = []
+        for s in surfaced:
+            k = _entry_key(s.entry)
+            if k in seen:
+                continue
+            seen.add(k)
+            deduped.append(s)
+        surfaced = deduped[:INJECTION_CAP]
 
     return Retrieval(exact_locks=locks, exact_corrections=corrections, surfaced=surfaced)
 

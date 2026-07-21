@@ -1,6 +1,6 @@
 """Self-learning memory: a deterministic termbase + a gated correction memory.
 
-The non-repeat guarantee lives here, not in any model behavior. See
+The deterministic reject-guard lives here, not in any model behavior. See
 ``guard.py`` (deterministic reject-guard), ``retrieval.py`` (exact span-scan +
 fuzzy surfacing), and ``learn.py`` (the trusted write path)."""
 

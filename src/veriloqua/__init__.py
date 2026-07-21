@@ -3,7 +3,7 @@ really mean.
 
 Three modes: ``fast`` (keyless Google, no setup), ``medium`` (LLM + memory), and
 ``high`` (LLM + independent verification). Corrections are learned durably so the
-same mistake is never repeated in the same context.
+corrected renderings are deterministically blocked from recurring in the same context.
 """
 
 from __future__ import annotations

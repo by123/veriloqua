@@ -7,6 +7,8 @@ defaults. API keys are redacted in ``repr`` so a logged Config never leaks a sec
 
 from __future__ import annotations
 
+import getpass
+import hashlib
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -15,6 +17,23 @@ from typing import Any
 import tomllib
 
 APP = "veriloqua"
+
+
+def _default_user_id() -> str:
+    """A real (local) user identity for user-scoped memory rows. OS account name —
+    stable per machine account, never leaves the machine."""
+    try:
+        return getpass.getuser() or "default"
+    except Exception:
+        return "default"
+
+
+def _default_project_id() -> str:
+    """A real project identity for project-scoped memory rows: directory name plus a
+    short path hash, so two checkouts named `app` don't share project memory."""
+    cwd = Path.cwd()
+    digest = hashlib.sha1(str(cwd).encode("utf-8")).hexdigest()[:8]
+    return f"{cwd.name}-{digest}"
 
 
 def _data_home() -> Path:
@@ -51,8 +70,8 @@ class Config:
 
     # --- backends / models ---
     # "claude_cli" | "codex_cli" | "anthropic" | "openai" | None (auto-detect).
-    # Auto-detect prefers a locally-installed agent CLI (claude/codex) so medium/high
-    # work with ZERO config and NO API key; API-key SDK backends are the fallback.
+    # Auto-detect prefers a locally-installed agent CLI (claude/codex) so auto mode
+    # works with ZERO config and NO API key; API-key SDK backends are the fallback.
     llm_provider: str | None = None
     # The tiered `auto` pipeline uses three models. Over the agent CLI these map to
     # `--model haiku`/`sonnet`/`opus`; SDK backends use the ids directly.
@@ -62,30 +81,24 @@ class Config:
     auto_deep: bool = True                     # allow escalation to the Opus deep pass
     auto_crosscheck: bool = True               # on hard cases, triangulate meaning via English
     auto_mt_shortcircuit: bool = True          # tier 0: trivial short inputs answer via keyless MT
-    # legacy (pre-tiered) fields, still read by SDK back-compat paths:
-    medium_model: str = "claude-haiku-4-5"
-    high_model: str = "claude-sonnet-5"
-    judge_model: str | None = None
-    high_backtranslate: bool = False
-    auto_escalate: bool = False
-    backtranslation_model: str | None = None
+    sdk_model: str = "claude-haiku-4-5"        # default model for API-key SDK backends
     embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     api_key: str | None = None                 # resolved from provider-native env if None
     # Optional model to pass to the agent CLI (`claude -p --model ...`). Default None
     # → let the CLI use whatever model it is already configured with (true zero-config).
     cli_model: str | None = None
 
-    # --- high-mode independence policy ---
-    # Strict independence needs a genuinely different judge model. When only one
-    # backend is configured we still run high, but same-model scoring is surfaced
-    # as judge_independent=false and the independence credit is dropped — never faked.
-    allow_same_model_judge: bool = True
-
     # --- third-party (keyless Google fast path) ---
     # Zero-config: the keyless Google endpoint is allowed by default (a one-time
     # transparent notice is printed). Set no_third_party to hard-disable it.
     allow_third_party: bool = True             # ship source text to the free endpoint
     no_third_party: bool = False               # hard guard: disables the free path
+
+    # --- memory scope identities ---
+    # user/project-scoped memory rows are stamped with these and retrieval only loads
+    # rows belonging to the current identity (legacy rows with empty scope_id still load).
+    user_id: str = field(default_factory=_default_user_id)
+    project_id: str = field(default_factory=_default_project_id)
 
     # --- request log (powers correct-by-id) ---
     request_log_enabled: bool = True
@@ -195,14 +208,13 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
         "VERILOQUA_TRIAGE_MODEL": "triage_model",
         "VERILOQUA_TRANSLATE_MODEL": "translate_model",
         "VERILOQUA_DEEP_MODEL": "deep_model",
-        "VERILOQUA_MEDIUM_MODEL": "medium_model",
-        "VERILOQUA_HIGH_MODEL": "high_model",
-        "VERILOQUA_JUDGE_MODEL": "judge_model",
-        "VERILOQUA_BACKTRANSLATION_MODEL": "backtranslation_model",
+        "VERILOQUA_SDK_MODEL": "sdk_model",
         "VERILOQUA_EMBED_MODEL": "embed_model",
         "VERILOQUA_CLI_MODEL": "cli_model",
         "VERILOQUA_API_KEY": "api_key",
         "VERILOQUA_DEFAULT_MODE": "default_mode",
+        "VERILOQUA_USER_ID": "user_id",
+        "VERILOQUA_PROJECT_ID": "project_id",
     }
     for env, attr in env_map.items():
         if env in os.environ:
@@ -213,7 +225,6 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
         cfg.context_dir = Path(os.environ["VERILOQUA_CONTEXT_DIR"])
     cfg.allow_third_party = _env_bool("VERILOQUA_ALLOW_THIRD_PARTY", cfg.allow_third_party)
     cfg.no_third_party = _env_bool("VERILOQUA_NO_THIRD_PARTY", cfg.no_third_party)
-    cfg.allow_same_model_judge = _env_bool("VERILOQUA_ALLOW_SAME_MODEL_JUDGE", cfg.allow_same_model_judge)
     cfg.request_log_enabled = _env_bool("VERILOQUA_REQUEST_LOG", cfg.request_log_enabled)
     cfg.auto_deep = _env_bool("VERILOQUA_AUTO_DEEP", cfg.auto_deep)
     cfg.auto_crosscheck = _env_bool("VERILOQUA_AUTO_CROSSCHECK", cfg.auto_crosscheck)

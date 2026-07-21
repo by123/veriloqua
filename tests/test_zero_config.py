@@ -85,9 +85,9 @@ def test_auto_falls_back_to_fast_when_llm_unusable(tmp_config):
     tr.close()
 
 
-def test_explicit_medium_surfaces_llm_error(tmp_config):
+def test_removed_modes_raise_a_clear_error(tmp_config):
     tr = Translator(config=tmp_config, mt_backend=FakeMTBackend(), llm_backend=_BoomLLM())
-    with pytest.raises(BackendNotConfigured):
-        # explicit mode: no silent downgrade (sentence-length input skips tier 0)
-        tr.translate("how is the weather looking today", to="es", mode="medium")
+    for legacy in ("medium", "high"):
+        with pytest.raises(ValueError, match="valid modes are 'fast' and 'auto'"):
+            tr.translate("hello", to="es", mode=legacy)
     tr.close()

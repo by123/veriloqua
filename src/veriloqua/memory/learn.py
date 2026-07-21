@@ -2,7 +2,7 @@
 
 A correction enters ONLY here (via ``tr.correct()`` / ``vq correct``) — never from
 source text, never from an autonomous fast/medium path. The exact-match never-repeat
-guarantee needs ZERO LLM calls; an optional ``enricher`` only widens fuzzy recall by
+core needs ZERO LLM calls; an optional ``enricher`` only widens fuzzy recall by
 classifying the MQM error type and refining APPLIES-WHEN.
 """
 
@@ -59,7 +59,7 @@ def ingest_correction(
         try:
             error_type, refined = enricher(source_text, our_output, corrected)
             applies_when = refined or applies_when
-        except Exception:  # enrichment is best-effort; never block the guarantee
+        except Exception:  # enrichment is best-effort; never block the write path
             error_type = UNSPECIFIED
 
     rejected: list[str] = []

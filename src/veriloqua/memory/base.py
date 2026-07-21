@@ -12,7 +12,8 @@ from veriloqua.memory.records import MemoryEntry, RequestLogRecord
 @runtime_checkable
 class MemoryStore(Protocol):
     # --- reads ---
-    def active_entries(self, src_lang: str, tgt_lang: str, scopes: list[str]) -> list[MemoryEntry]:
+    def active_entries(self, src_lang: str, tgt_lang: str, scopes: list[str], *,
+                    user_id: str = "", project_id: str = "") -> list[MemoryEntry]:
         """All active, live entries for the pair+scopes — the material the
         deterministic span-scan is built from."""
         ...

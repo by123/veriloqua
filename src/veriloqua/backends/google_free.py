@@ -46,6 +46,7 @@ class GoogleFreeBackend:
         max_retries: int = 3,
         client: httpx.Client | None = None,
     ) -> None:
+        self.allow_third_party = allow_third_party
         self.no_third_party = no_third_party
         self.timeout = timeout
         self.max_retries = max_retries
@@ -54,10 +55,12 @@ class GoogleFreeBackend:
 
     def _ensure_consent(self) -> None:
         global _notified
-        if self.no_third_party:
+        if self.no_third_party or not self.allow_third_party:
+            # consent withheld (either the hard guard or allow_third_party=False):
+            # never ship the text to the free endpoint
             raise ThirdPartyConsentRequired(
-                "no_third_party guard is set — the free Google path is disabled. "
-                "Use a local agent CLI (mode medium/high) or a keyed backend."
+                "third-party consent is withheld — the free Google path is disabled. "
+                "Use a local agent CLI (auto mode) or a keyed backend."
             )
         # zero-config: allowed by default, with a one-time transparent notice.
         if not _notified and not os.environ.get("VERILOQUA_QUIET"):

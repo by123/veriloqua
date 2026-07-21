@@ -3,15 +3,15 @@
 **A self-improving translation engine that understands what people really mean.**
 
 Veriloqua translates for *meaning, tone, register, and cultural effect* — not word-swaps —
-and **learns from every correction so it never repeats the same mistake in the same context**.
+and **learns from every correction**: a deterministic guard blocks corrected renderings
+from recurring on exact-span matches in the same context.
 
-**Completely zero-config.** `pip install veriloqua` and go — **no API keys, no setup**:
+**Zero-config by default.** `pip install veriloqua` and go — **no API keys, no setup**:
 
-- **Fast** uses Google's public translation endpoint directly (keyless).
-- **Medium / High** run through a **locally logged-in agent CLI** — `claude -p` (Claude Code)
-  or `codex exec` (Codex) — as a background subprocess. No `ANTHROPIC_API_KEY`, no SDK.
-- **`auto`** (the default) picks the best available: the agent CLI if it's installed, otherwise
-  the keyless fast path. Either way it just works.
+- **`fast`** uses Google's public translation endpoint directly (keyless).
+- **`auto`** (the default) runs a tiered LLM cascade through a **locally logged-in agent
+  CLI** — `claude -p` (Claude Code) or `codex exec` (Codex) — as a background subprocess.
+  No `ANTHROPIC_API_KEY`, no SDK. With no LLM available it degrades to the keyless fast path.
 
 ```bash
 pip install veriloqua
@@ -24,10 +24,10 @@ import veriloqua
 print(veriloqua.translate("Break a leg!", to="zh"))
 
 tr = veriloqua.Translator()
-r = tr.translate("Break a leg!", to="zh", mode="high", domain="casual-chat")
+r = tr.translate("Break a leg!", to="zh", mode="auto", domain="casual-chat")
 print(r.text, r.confidence)
 
-# Teach it once — it never repeats that mistake in this context again
+# Teach it once — the deterministic guard blocks that rendering in this context
 tr.correct(r.request_id, "祝你好运")
 ```
 
@@ -36,50 +36,45 @@ tr.correct(r.request_id, "祝你好运")
 
 ---
 
-## Three modes, one API
+## Two modes, one API
 
-| Mode | What it does | Needs | Speed (API key) | Speed (agent CLI) |
-|------|--------------|-------|-----------------|-------------------|
-| **`fast`** | Google Translate directly | nothing (keyless) | <1s | <1s |
-| **`medium`** | One grounded LLM pass + glossary/correction memory | agent CLI **or** API key | ~2–3s | ~10s (varies 9–24s) |
-| **`high`** | 2 candidates → judge picks the best → deterministic reject-guard | agent CLI or API key | ~8–10s | ~20–28s |
+| Mode | What it does | Needs | Typical speed |
+|------|--------------|-------|---------------|
+| **`fast`** | Google Translate directly + invariant term locks | nothing (keyless) | <1s |
+| **`auto`** (default) | Tiered LLM cascade: trivial inputs via keyless MT (<1s, zero LLM calls) → Haiku triage → Sonnet translate + self-review → Opus deep judgment on hard cases, with correction memory and a deterministic reject-guard | agent CLI **or** API key (else degrades to fast) | <1s trivial · ~10-30s per LLM tier over an agent CLI · ~2-10s over an API key |
 
-Pick per call: `translate(text, to="ja", mode="fast"|"medium"|"high"|"auto")`. `auto` (the default)
-answers trivial short inputs ("你好", "thank you") instantly via the keyless fast path — zero LLM
-calls — and routes everything else through the tiered cascade (Haiku triage → Sonnet translate →
-Opus deep judgment on hard cases). With no LLM available it degrades to the keyless fast path.
+Pick per call: `translate(text, to="ja", mode="fast"|"auto")`.
 
-### Speed & the agent-CLI floor
+### Speed expectations (typical, not guaranteed)
 
-Over a local **agent CLI** (`claude -p`), every call cold-boots a full agent (~7s) and the model's
-thinking time varies by input — so medium lands ~10s for typical text but can reach ~20s on a hard
-idiom, and it is **not a hard ≤10s guarantee**. High is reliably under 30s. The engine already
-disables MCP/settings/session loading, keeps output terse, and tells the model to translate
-directly — this cut latency ~2–3× — but the boot + thinking floor is inherent to running a full
-agent locally.
+Over a local **agent CLI** (`claude -p`), every call cold-boots a full agent (~7s) and the
+model's thinking time varies by input, so per-tier latencies vary — a hard idiom that
+escalates through all three tiers can take ~40s. Latencies here are typical observations,
+not ceilings. An **API key** removes the boot cost (the SDK path is used automatically when
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is set). `VERILOQUA_PROGRESS=1` shows per-call
+progress so a run never looks hung.
 
-**For a hard latency guarantee** (medium ~2–3s, high ~8–10s), use an **API key** — the SDK path has
-no boot cost and is used automatically when `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is set. **`fast`
-mode is always <1s.** `VERILOQUA_PROGRESS=1` shows per-call progress so a run never looks hung.
+## Correction memory: teach it once, deterministically enforced
 
-## The headline feature: it never repeats a corrected mistake
-
-Correcting a translation is a first-class, durable operation — and the guarantee is
-**deterministic**, not a hope pinned on model behavior:
+Correcting a translation is a first-class, durable operation. Enforcement lives in
+deterministic code, not in model behavior — and where enforcement cannot apply, the result
+says so instead of passing silently:
 
 ```python
 r = tr.translate("the cloud", to="zh", domain="tech")   # say it returned "云朵" (wrong)
 tr.correct(r.request_id, "云端")                          # the accepted rendering
-# From now on, in a tech context, "the cloud" will never come back as "云朵".
+# In a tech context, an exact-span recurrence of "the cloud" → "云朵" is now blocked.
 ```
 
 - **A correction stores your accepted rendering *and* the rejected one** (the mistake).
 - On the next translation, a **deterministic normalized-span scan** finds any recurrence of
   the corrected span — anywhere in the input, not just identical whole documents.
-- A **post-generation reject-guard** removes the rejected rendering if the model produces it
-  again. An exact repeat of a corrected mistake *in its context* is impossible, regardless of
-  model or temperature.
-- **It works with zero LLM keys.** `vq correct` and the never-repeat guarantee need no API key;
+- A **post-generation reject-guard** rewrites the rejected rendering if the model produces
+  it again, using the same normalized matching for detection and replacement. If it detects
+  a violation it cannot rewrite, the result is **degraded, never silently OK**.
+- **Scope of the claim:** enforcement is exact-span, same-context. Paraphrases of a mistake
+  are the model's job (the correction is injected into the prompt), not the guard's.
+- **It works with zero LLM keys.** `vq correct` and the deterministic core need no API key;
   an optional model call only *widens* fuzzy recall.
 
 ### Anti-overfit by design
@@ -95,14 +90,14 @@ human `vq lock` — counts alone never promote a rule. Every correction auto-gen
 ```bash
 vq "Any language text here"                     # no --to → translates to Chinese (zh)
 vq "Hello, world" --to es                       # pick a target language
-vq "The spirit is willing" -t ru -m high -d literature
-echo "long text" | vq --to fr --mode medium --json
+vq "The spirit is willing" -t ru -d literature          # auto mode is the default
+echo "long text" | vq --to fr --mode fast --json
 
 vq correct <request_id> "better translation"   # the trusted learning path (no key needed)
 vq glossary add "New York" "纽约" --from en --to zh --invariant
 vq memory stats | export backup.json | forget <id> | conflicts | purge-log
 vq lock <entry_id> --scope global              # explicit human promotion
-vq eval                                        # deterministic never-repeat / over-fit gate
+vq eval                                        # deterministic correction-replay / over-fit gate
 vq backends                                    # what's installed / available
 ```
 
@@ -115,8 +110,8 @@ Two tiers with opposite mechanisms:
 - **Term locks** (a deterministic glossary): applied in *all* modes. Invariant locks
   (proper nouns, product names, codes) are protected by masking so they survive machine
   translation intact and never get mangled by inflection.
-- **Corrections** (contextual memory): retrieved and injected in medium/high, gated by context,
-  and enforced by the deterministic reject-guard.
+- **Corrections** (contextual memory): retrieved and injected in auto mode, gated by context,
+  and enforced by the deterministic reject-guard on exact-span matches.
 
 Everything is stored in a **local SQLite file you own** (`~/.local/share/veriloqua/memory.db`) —
 it never phones home. Retrieval precedence is `user > project > global`. Corrections
@@ -125,8 +120,8 @@ index guarantees at most one active row per key.
 
 ### Privacy
 
-Local-only storage, minimal-span records, hashing, and `forget()` / `export` are the real
-guarantees. `correct-by-id` is powered by a **bounded, opt-outable request-log ring buffer**
+Local-only storage, minimal-span records, scrubbing, hashing, and `forget()` / `export` are
+the real mechanisms. `correct-by-id` is powered by a **bounded, opt-outable request-log ring buffer**
 (last 1000 requests or 30 days by default) — not permanent retention of every source. Clear it
 any time with `vq memory purge-log`, or disable logging entirely (you keep correct-by-text).
 A regex scrubber redacts obvious secrets; we don't claim it removes PII from free prose.
@@ -142,25 +137,18 @@ Nothing is required. Everything below is optional.
 |-----|---------|
 | `VERILOQUA_LLM_PROVIDER` | force a backend: `claude_cli` \| `codex_cli` \| `anthropic` \| `openai` (default: auto-detect, agent CLI first) |
 | `VERILOQUA_CLI_MODEL` | model to pass to the agent CLI (`claude -p --model …`); default lets the CLI use its own model |
-| `VERILOQUA_MEDIUM_MODEL` / `VERILOQUA_HIGH_MODEL` | translator models per mode (SDK backends) |
-| `VERILOQUA_JUDGE_MODEL` / `VERILOQUA_BACKTRANSLATION_MODEL` | the **independent** verification models for high mode |
+| `VERILOQUA_TRIAGE_MODEL` / `VERILOQUA_TRANSLATE_MODEL` / `VERILOQUA_DEEP_MODEL` | the three cascade tier models |
+| `VERILOQUA_SDK_MODEL` | default model for API-key SDK backends |
 | `VERILOQUA_NO_THIRD_PARTY` | hard-disable the keyless Google path (fast mode is allowed by default) |
 | `VERILOQUA_QUIET` | silence the one-time third-party notice |
 | `VERILOQUA_MAX_COST` / `VERILOQUA_MAX_CALLS` | per-job budget ceilings |
 
-### High-mode independence
-
-Real verification needs a *different* model judging the translator's work. Set a distinct
-`judge_model` and the trace reports `judge_independent: true`. With a single model configured,
-high mode still runs (same model, different prompt) but honestly reports
-`judge_independent: false` and drops the independence credit from confidence — it is **never faked**.
-
 ### Budgets
 
-Every mode enforces per-segment **and** per-job ceilings (calls / tokens / wall-clock / est. cost).
-High mode is capped at ≤12 LLM calls/segment. On exhaustion the engine **fails closed** to the
-best result so far (or the keyless fast path) with a clear reason — a large file can never
-silently become a five-figure bill.
+Every mode enforces per-segment **and** per-job ceilings (calls / tokens / wall-clock /
+est. cost). On exhaustion the engine stops and returns the best result so far (or the
+keyless fast path), marked degraded with a clear reason, so a large file cannot silently
+run up an unbounded bill.
 
 ## Backends
 
@@ -179,16 +167,16 @@ pip install veriloqua[cli]         # rich CLI
 pip install veriloqua[all]
 ```
 
-The core install depends only on `httpx`. The self-learning guarantee and the fast path use
+The core install depends only on `httpx`. The self-learning core and the fast path use
 nothing heavier than the Python standard library.
 
 ## How it was designed
 
 Veriloqua's architecture came out of a five-way design debate (a linguist, an LLM-verification
 architect, a memory/self-learning expert, a packaging engineer, and an adversarial red-teamer),
-synthesized and then stress-tested. The decisive principle: **the guarantee lives in
+synthesized and then stress-tested. The decisive principle: **enforcement lives in
 deterministic code, not model behavior** — optional ML only makes recall better, never carries
-the promise.
+the enforcement.
 
 ## License
 

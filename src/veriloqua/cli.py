@@ -209,7 +209,7 @@ def _cmd_correct(args: argparse.Namespace) -> int:
         print(f"learned correction #{entry.id}: \"{entry.source_text[:60]}\" -> "
               f"\"{entry.accepted_translation}\" [{entry.scope.value}]")
         if entry.rejected_translations:
-            print(f"  will never repeat: {entry.rejected_translations}", file=sys.stderr)
+            print(f"  blocked renderings: {entry.rejected_translations}", file=sys.stderr)
     finally:
         tr.close()
     return 0

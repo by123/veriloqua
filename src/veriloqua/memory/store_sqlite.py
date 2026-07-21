@@ -8,6 +8,7 @@ partial-unique-index invariant (at most one active row per key).
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -81,6 +82,21 @@ class SqliteMemoryStore:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._init_schema()
+        self._restrict_permissions()
+
+    def _restrict_permissions(self) -> None:
+        """Owner-only (0600) on the DB and its WAL/SHM sidecars: the memory holds
+        user text and must not be world-readable. Best-effort (no-op on :memory:,
+        limited effect on Windows)."""
+        if self.path == ":memory:":
+            return
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(self.path + suffix)
+            try:
+                if p.exists():
+                    os.chmod(p, 0o600)
+            except OSError:
+                pass
 
     def _init_schema(self) -> None:
         self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -94,20 +110,28 @@ class SqliteMemoryStore:
             self._conn.commit()
 
     # ------------------------------------------------------------------ reads
-    def active_entries(self, src_lang: str, tgt_lang: str, scopes: list[str]) -> list[MemoryEntry]:
+    def active_entries(self, src_lang: str, tgt_lang: str, scopes: list[str], *,
+                       user_id: str = "", project_id: str = "") -> list[MemoryEntry]:
         placeholders = ",".join("?" for _ in scopes) or "''"
         base = (
             "SELECT * FROM entries WHERE tgt_lang=? AND status='active' "
             f"AND deleted_at IS NULL AND scope IN ({placeholders})"
         )
+        params: list = [tgt_lang, *scopes]
+        # scope ownership: user rows belong to this user, project rows to this project;
+        # legacy rows with an empty scope_id predate identities and still load.
+        base += (
+            " AND (scope='global'"
+            " OR (scope='user' AND (scope_id=? OR scope_id=''))"
+            " OR (scope='project' AND (scope_id=? OR scope_id='')))"
+        )
+        params += [user_id, project_id]
         # 'auto' is a wildcard on either side: an unspecified query source matches any
         # stored source, and stored 'auto' entries match a specific-source query.
-        if src_lang in ("auto", "", None):
-            cur = self._conn.execute(base, [tgt_lang, *scopes])
-        else:
-            cur = self._conn.execute(
-                base + " AND (src_lang=? OR src_lang='auto')", [tgt_lang, *scopes, src_lang]
-            )
+        if src_lang not in ("auto", "", None):
+            base += " AND (src_lang=? OR src_lang='auto')"
+            params.append(src_lang)
+        cur = self._conn.execute(base, params)
         return [_row_to_entry(r) for r in cur.fetchall()]
 
     def get(self, entry_id: int) -> MemoryEntry | None:
@@ -180,7 +204,7 @@ class SqliteMemoryStore:
             ),
         )
         self._conn.commit()
-        entry.id = int(cur.lastrowid)
+        entry.id = int(cur.lastrowid or 0)
         return entry.id
 
     def supersede(self, old_id: int, new_entry: MemoryEntry) -> int:
@@ -218,7 +242,7 @@ class SqliteMemoryStore:
             (existing_id,),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return int(cur.lastrowid or 0)
 
     def promote_scope(self, entry_id: int, scope: str) -> bool:
         cur = self._conn.execute(

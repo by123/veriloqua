@@ -1,6 +1,6 @@
 """Shared, deterministic text normalization.
 
-The non-repeat guarantee (see ``memory/guard.py``) depends on *stable* string
+The deterministic reject-guard (see ``memory/guard.py``) depends on *stable* string
 comparison. All exact-match keys and reject-guard checks route through the
 functions here so the verdict is byte-for-byte reproducible on any machine,
 independent of which optional fuzzy backend happens to be installed.

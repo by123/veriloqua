@@ -3,8 +3,8 @@
     import veriloqua
     print(veriloqua.translate("Hello", to="es"))            # fast, keyless
     tr = veriloqua.Translator()
-    r = tr.translate("The spirit is willing", to="ru", mode="high")
-    tr.correct(r.request_id, "лучший перевод")               # never repeats that mistake
+    r = tr.translate("The spirit is willing", to="ru", mode="auto")
+    tr.correct(r.request_id, "лучший перевод")               # learns the correction
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from veriloqua.errors import BackendNotConfigured, BudgetExhausted
 from veriloqua.lang.register import RegisterProfile
 from veriloqua.memory import learn
 from veriloqua.memory.records import MemoryEntry, RequestLogRecord, Scope
-from veriloqua.memory.scrub import source_hash
+from veriloqua.memory.scrub import scrub_text, source_hash
 from veriloqua.memory.store_sqlite import SqliteMemoryStore
 from veriloqua.modes import Mode, policy_for
 from veriloqua.result import FastResult, Status, TranslationResult
@@ -105,11 +105,11 @@ class Translator:
             if provider == "anthropic":
                 from veriloqua.backends.llm_anthropic import AnthropicBackend
 
-                return AnthropicBackend(api_key=key, model=self.config.medium_model)
+                return AnthropicBackend(api_key=key, model=self.config.sdk_model)
             if provider == "openai":
                 from veriloqua.backends.llm_openai import OpenAIBackend
 
-                return OpenAIBackend(api_key=key, model=self.config.medium_model)
+                return OpenAIBackend(api_key=key, model=self.config.sdk_model)
         except BackendNotConfigured:
             return None
         return None
@@ -139,18 +139,19 @@ class Translator:
         register: str | None = None,
         context: str | None = None,
     ) -> TranslationResult | FastResult:
-        mode = Mode(mode) if not isinstance(mode, Mode) else mode
+        if not isinstance(mode, Mode):
+            try:
+                mode = Mode(mode)
+            except ValueError:
+                raise ValueError(
+                    f"unknown mode {mode!r}: valid modes are 'fast' and 'auto'"
+                ) from None
         if register is not None:
             self.register = RegisterProfile.parse(register)
         # Domain/app brief: an explicit string wins; otherwise the `domain` names a pack file.
         context_brief = context if context is not None else self.config.domain_context(domain)
 
         llm = self._llm()
-        if mode in (Mode.MEDIUM, Mode.HIGH) and llm is None:
-            raise BackendNotConfigured(
-                f"{mode.value} mode needs an LLM backend. Configure one "
-                "(pip install veriloqua[anthropic] + ANTHROPIC_API_KEY) or use mode='fast'."
-            )
         if mode is Mode.AUTO and llm is None:
             mode = Mode.FAST  # graceful: no LLM → keyless fast path
 
@@ -207,7 +208,7 @@ class Translator:
             self._store, source_text=rec.source_text, our_output=rec.output_text,
             corrected=corrected, src_lang=rec.src_lang, tgt_lang=rec.tgt_lang,
             domain=rec.domain, register=rec.register, scope=scope, note=note,
-            replay_dir=self.config.replay_dir,
+            scope_id=self._scope_id_for(scope), replay_dir=self.config.replay_dir,
         )
 
     def correct_text(
@@ -227,7 +228,7 @@ class Translator:
         return learn.ingest_correction(
             self._store, source_text=source, our_output=our_output, corrected=corrected,
             src_lang=src, tgt_lang=tgt, domain=domain, register=register, scope=scope,
-            note=note, replay_dir=self.config.replay_dir,
+            note=note, scope_id=self._scope_id_for(scope), replay_dir=self.config.replay_dir,
         )
 
     def add_term(self, *, source: str, target: str, src: str, tgt: str,
@@ -237,7 +238,17 @@ class Translator:
         return learn.add_term_lock(
             self._store, src_lang=src, tgt_lang=tgt, source_text=source, target=target,
             invariant=invariant, domain=domain, register=register, scope=scope,
+            scope_id=self._scope_id_for(scope),
         )
+
+    def _scope_id_for(self, scope: Scope) -> str:
+        """The real identity a scoped write is stamped with: user rows carry the user
+        id, project rows the project id, global rows none."""
+        if scope is Scope.USER:
+            return self.config.user_id
+        if scope is Scope.PROJECT:
+            return self.config.project_id
+        return ""
 
     def lock(self, entry_id: int, *, scope: str = "global") -> bool:
         return self._store.promote_scope(entry_id, scope)
@@ -274,10 +285,13 @@ class Translator:
             return
         register = self.register.register.value if self.register else ""
         detected = getattr(result, "detected_src", src) or src
+        # the ring buffer stores SCRUBBED text: obviously-sensitive tokens (emails,
+        # keys, long digit runs) never persist; the hash stays over the original so
+        # correct-by-text can still find the request
         rec = RequestLogRecord(
             request_id=result.request_id, src_lang=detected, tgt_lang=tgt,
-            source_text=text, output_text=result.text, mode=mode.value,
-            domain=domain, register=register, source_hash=source_hash(text),
+            source_text=scrub_text(text), output_text=scrub_text(result.text),
+            mode=mode.value, domain=domain, register=register, source_hash=source_hash(text),
         )
         try:
             self._store.log_request(rec)
@@ -290,7 +304,7 @@ def translate(text: str, *, to: str, source: str = "auto", mode: str | Mode = "a
               **overrides: Any) -> TranslationResult | FastResult:
     """One-shot translation. Defaults to ``auto`` (zero config): uses a locally
     logged-in agent CLI (`claude`/`codex`) when present, otherwise the keyless Google
-    fast path. Force a mode with ``mode='fast'|'medium'|'high'``."""
+    fast path. Force the keyless path with ``mode='fast'``."""
     tr = Translator(**overrides)
     try:
         return tr.translate(text, to=to, source=source, mode=mode, domain=domain,

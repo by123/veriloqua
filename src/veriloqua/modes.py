@@ -1,8 +1,9 @@
 """Mode policies and budgets.
 
+Two modes only: ``fast`` (keyless MT) and ``auto`` (the tiered LLM cascade).
 A mode is a *policy* over the pipeline: which capabilities are allowed, how much
 verification runs, and how much may be spent. Budgets are enforced per-segment AND
-per-job so a large file can never silently become a five-figure bill.
+per-job to bound the cost of a large file.
 """
 
 from __future__ import annotations
@@ -13,21 +14,18 @@ from enum import Enum
 
 class Mode(str, Enum):
     FAST = "fast"
-    MEDIUM = "medium"
-    HIGH = "high"
     AUTO = "auto"
 
 
 class MemoryWrite(str, Enum):
     NONE = "none"                    # fast: never writes
-    EXPLICIT_ONLY = "explicit_only"  # medium: only via correct()
-    AUTONOMOUS = "autonomous"        # high: auto-writes through quarantine
+    AUTONOMOUS = "autonomous"        # auto: the deep tier may write through quarantine
 
 
 @dataclass(slots=True, frozen=True)
 class Budget:
-    """Per-segment AND per-job ceilings. The pipeline fails *closed* to the best
-    result so far when any ceiling is hit — never loops, never silently overspends."""
+    """Per-segment AND per-job ceilings. When a ceiling is hit the pipeline stops and
+    returns the best result so far (marked degraded) instead of looping or overspending."""
 
     # per-segment
     max_llm_calls: int = 0
@@ -67,36 +65,6 @@ FAST = ModePolicy(
     budget=Budget(max_mt_calls=1, wall_clock_s=5.0),
 )
 
-MEDIUM = ModePolicy(
-    mode=Mode.MEDIUM,
-    use_llm=True,
-    glossary_apply=True,
-    apply_corrections=True,
-    memory_read=True,
-    memory_write=MemoryWrite.EXPLICIT_ONLY,
-    verify=True,                     # cheap stdlib round-trip flag only
-    web_research=False,
-    candidates=1,
-    budget=Budget(max_llm_calls=2, max_mt_calls=2, wall_clock_s=15.0),
-)
-
-HIGH = ModePolicy(
-    mode=Mode.HIGH,
-    use_llm=True,
-    glossary_apply=True,
-    apply_corrections=True,
-    memory_read=True,
-    memory_write=MemoryWrite.AUTONOMOUS,
-    verify=True,
-    web_research=True,               # only fires if a SearchBackend is configured
-    candidates=2,                    # 2 strategies (faithful / localized), one batched call
-    # Tuned for latency over a local agent CLI: the default high path is 2 calls
-    # (candidates + batched judge). Blind back-translation is opt-in (config
-    # high_backtranslate) and CoVe is conditional (landmine only), so a fresh
-    # segment stays ~2 calls. Cap kept high as a safety backstop for regenerations.
-    budget=Budget(max_llm_calls=12, max_mt_calls=1, wall_clock_s=30.0),
-)
-
 # The one non-fast mode: a tiered cascade (Haiku triage → Sonnet translate+review →
 # Opus deep, only when flagged). Budget covers triage + translate + deep + 1 slack.
 AUTO = ModePolicy(
@@ -112,14 +80,8 @@ AUTO = ModePolicy(
     budget=Budget(max_llm_calls=4, max_mt_calls=0, wall_clock_s=60.0),
 )
 
-PRESETS: dict[Mode, ModePolicy] = {
-    Mode.FAST: FAST, Mode.AUTO: AUTO, Mode.MEDIUM: MEDIUM, Mode.HIGH: HIGH,
-}
+PRESETS: dict[Mode, ModePolicy] = {Mode.FAST: FAST, Mode.AUTO: AUTO}
 
 
 def policy_for(mode: Mode) -> ModePolicy:
-    """Everything except fast now runs the tiered ``auto`` pipeline; medium/high are
-    kept only as back-compat aliases and resolve to the same policy."""
-    if mode is Mode.FAST:
-        return FAST
-    return AUTO
+    return FAST if mode is Mode.FAST else AUTO

@@ -1,4 +1,4 @@
-"""The flagship acceptance suite: the engine never repeats a corrected mistake in
+"""The flagship acceptance suite: the deterministic guard blocks a corrected mistake in
 its context, never over-applies it out of context, and learns with zero LLM keys."""
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ def test_never_repeat_after_correction(tmp_config):
     # the fake model stubbornly keeps producing the bad rendering
     respond = lambda s: BAD if "break a leg" in s else f"TR::{s}"
     tr = _tr(tmp_config, respond)
-    r1 = tr.translate("break a leg", to="zh", mode="medium", domain="casual-chat")
+    r1 = tr.translate("break a leg", to="zh", mode="auto", domain="casual-chat")
     tr.correct(r1.request_id, GOOD, scope="user")
-    r2 = tr.translate("break a leg", to="zh", mode="medium", domain="casual-chat")
-    assert BAD not in r2.text          # the corrected mistake is impossible now
+    r2 = tr.translate("break a leg", to="zh", mode="auto", domain="casual-chat")
+    assert BAD not in r2.text          # the corrected rendering is blocked now
     assert GOOD in r2.text             # deterministic guard supplied the accepted rendering
     tr.close()
 
@@ -33,7 +33,7 @@ def test_never_repeat_embedded_in_larger_text(tmp_config):
     tr = _tr(tmp_config, respond)
     tr.correct_text(source="break a leg", our_output=BAD, corrected=GOOD,
                     src="en", tgt="zh", domain="casual-chat")
-    r = tr.translate("please break a leg tonight", to="zh", mode="medium", domain="casual-chat")
+    r = tr.translate("please break a leg tonight", to="zh", mode="auto", domain="casual-chat")
     assert BAD not in r.text
     tr.close()
 
@@ -44,13 +44,13 @@ def test_overfit_guard_out_of_scope(tmp_config):
     tr = _tr(tmp_config, respond)
     tr.correct_text(source="break a leg", our_output=BAD, corrected=GOOD,
                     src="en", tgt="zh", domain="casual-chat")
-    r = tr.translate("break a leg", to="zh", mode="medium", domain="legal")
+    r = tr.translate("break a leg", to="zh", mode="auto", domain="legal")
     assert r.text == BAD               # unchanged: the correction did not apply here
     tr.close()
 
 
 def test_zero_llm_correction_path(tmp_config):
-    # no LLM configured — correction + guarantee still work
+    # no LLM configured — correction + guard still work
     tr = Translator(config=tmp_config, mt_backend=FakeMTBackend())
     e = tr.correct_text(source="the cloud", our_output="云朵", corrected="云端",
                         src="en", tgt="zh", domain="tech")

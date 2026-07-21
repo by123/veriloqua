@@ -72,6 +72,8 @@ def _model_alias(model: str | None) -> str | None:
 
 
 class CliLLMBackend:
+    name = "cli"  # overridden per instance with the concrete preset (claude_cli/codex_cli)
+
     def __init__(
         self,
         preset: str = "claude_cli",
@@ -113,6 +115,7 @@ class CliLLMBackend:
         # Model selection: an explicit cli_model wins (passed raw). Otherwise map the
         # per-call model to a CLI alias ONLY for backends whose aliases match (Claude).
         # For codex, "haiku"/"sonnet" are not valid models, so pass nothing → codex default.
+        alias: str | None
         if self._model:
             alias = self._model
         elif self._spec.get("aliases"):

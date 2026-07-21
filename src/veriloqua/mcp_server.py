@@ -7,7 +7,7 @@ Two ways to use it, matching the "who is the translator?" split:
   project's term locks + past corrections for a text, translate it yourself (you are
   the LLM), then call ``vq_correct`` if a human fixes it. No extra model call, instant.
 * **Veriloqua translates** — call ``vq_translate`` to run the full engine
-  (fast = keyless Google; medium/high = a configured backend).
+  (fast = keyless Google; auto = the tiered LLM cascade).
 
 Run it with ``veriloqua-mcp`` (stdio). Install:  pip install "veriloqua[mcp]"
 Add to a client, e.g.:  claude mcp add veriloqua -- veriloqua-mcp
@@ -38,9 +38,9 @@ def _hit_dicts(result: Any) -> list[dict]:
 def _tool_translate(text: str, to: str = "zh", source: str = "auto",
                     mode: str = "fast", domain: str = "") -> dict:
     """Translate text end-to-end with Veriloqua, applying the project glossary and the
-    never-repeat correction memory. `to` defaults to Chinese. `mode`: "fast" (keyless
-    Google, instant — the default), "medium" (one LLM pass), or "high" (candidates +
-    judge). Returns `request_id` — pass it to vq_correct to teach a fix. Prefer
+    correction memory. `to` defaults to Chinese. `mode`: "fast" (keyless Google,
+    instant — the default) or "auto" (tiered LLM cascade, needs a configured backend).
+    Returns `request_id` — pass it to vq_correct to teach a fix. Prefer
     vq_lookup_glossary + your own translation when you are already an LLM agent."""
     tr = _translator()
     try:
@@ -68,7 +68,10 @@ def _tool_lookup_glossary(text: str, src: str = "auto", tgt: str = "zh",
 
     tr = _translator()
     try:
-        entries = tr._store.active_entries(src, tgt, ["user", "project", "global"])
+        entries = tr._store.active_entries(
+            src, tgt, ["user", "project", "global"],
+            user_id=tr.config.user_id, project_id=tr.config.project_id,
+        )
         ret = retrieval.retrieve(entries, text, {"domain": domain})
         locks = [{"source": e.source_text, "target": e.accepted_translation,
                   "invariant": e.invariant, "scope": e.scope.value} for e in ret.exact_locks]
@@ -92,7 +95,8 @@ def _tool_lookup_glossary(text: str, src: str = "auto", tgt: str = "zh",
 def _tool_correct(corrected: str, request_id: str = "", source: str = "",
                   our_output: str = "", src: str = "auto", tgt: str = "zh",
                   domain: str = "") -> dict:
-    """Teach Veriloqua a correction so it never repeats that mistake in this context.
+    """Teach Veriloqua a correction; the deterministic guard then blocks that rendering
+    on exact-span matches in this context.
     Provide EITHER `request_id` (from a prior vq_translate) OR `source` + `our_output`
     (the wrong translation you produced) + `tgt`. The rejected rendering is stored and
     will be blocked deterministically next time."""

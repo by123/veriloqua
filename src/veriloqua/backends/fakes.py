@@ -73,28 +73,9 @@ class FakeLLMBackend:
             # default fake: the audit agrees (tests that need a divergence subclass this)
             return {"source_reading": "", "translation_reading": "", "source_intelligible": True,
                     "agree": True, "divergence": ""}
-        if pa.TASK_JUDGE in user:
-            # score five indices; candidate 0 wins by min-dimension
-            return {
-                "scores": [
-                    {"candidate_index": i, "adequacy": 5 - i, "fluency": 5,
-                     "register": 5 - min(i, 1), "terminology": 5, "culture": 5, "issues": []}
-                    for i in range(5)
-                ]
-            }
-        if pa.TASK_BACKTRANSLATE in user:
-            body = _between(user, pa.UNTRUSTED_OPEN, pa.UNTRUSTED_CLOSE)
-            return {"back_translation": body.replace("[to_backtranslate]", "").strip()}
         src = pa.extract_source(user)
         primary = self.respond(src)
-        if pa.TASK_CANDIDATES in user:
-            return {
-                "candidates": [
-                    {"text": primary, "strategy": "faithful"},
-                    {"text": primary, "strategy": "localized"},
-                ]
-            }
-        # translate (+ self-review shape; extra keys are harmless for legacy callers)
+        # translate (+ self-review shape)
         return {
             "translation": primary,
             "self_confidence": 0.72,
@@ -104,9 +85,3 @@ class FakeLLMBackend:
             "chosen_reading": None,
             "notes": [],
         }
-
-
-def _between(text: str, open_tok: str, close_tok: str) -> str:
-    if open_tok in text and close_tok in text:
-        return text.split(open_tok, 1)[1].split(close_tok, 1)[0]
-    return text

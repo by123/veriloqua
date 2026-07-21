@@ -15,8 +15,9 @@ Two modes only:
        ├─ no  → output
        └─ yes → web search (if configured) + Opus deep judgment → write to knowledge base
 
-Everything ends at the deterministic reject-guard, which is the hard backstop for the
-never-repeat guarantee. ``medium``/``high`` are kept only as aliases that route to ``auto``.
+Everything ends at the deterministic reject-guard, which enforces corrected renderings
+on exact-span matches and reports anything it could not rewrite so the result degrades
+instead of passing silently.
 """
 
 from __future__ import annotations
@@ -39,7 +40,11 @@ from veriloqua.engine.prompt_assembly import (
 )
 from veriloqua.engine.validators import dominant_script, validate_fast
 from veriloqua.errors import BackendNotConfigured, BudgetExhausted
-from veriloqua.lang.placeholders import extract_placeholders, restore_placeholders
+from veriloqua.lang.placeholders import (
+    extract_placeholders,
+    placeholders_preserved,
+    restore_placeholders,
+)
 from veriloqua.lang.register import RegisterProfile
 from veriloqua.memory import guard, inject, retrieval
 from veriloqua.memory.records import MemoryEntry, Provenance, Scope
@@ -49,6 +54,14 @@ from veriloqua.result import FastResult, MemoryHit, Status, TranslationResult
 _SCOPES = [Scope.USER.value, Scope.PROJECT.value, Scope.GLOBAL.value]
 AUTO_FLOOR = 0.6                 # below this, Sonnet's result escalates to the Opus deep pass
 SRC_CONF_FLOOR = 0.5             # below this, the detected source language is treated as uncertain
+
+# Status only ever gets worse as checks accumulate — a later, milder flag must never
+# overwrite an earlier DEGRADED verdict back toward OK.
+_STATUS_RANK = {Status.OK: 0, Status.UNCERTAIN: 1, Status.DEGRADED: 2}
+
+
+def _worsen(current: Status, new: Status) -> Status:
+    return new if _STATUS_RANK[new] > _STATUS_RANK[current] else current
 
 
 @dataclass(slots=True)
@@ -123,12 +136,15 @@ def _wrong_script_for_target(candidate: str, tgt: str, source: str) -> bool:
 def _load_entries(ctx: PipelineContext, src: str, tgt: str) -> list[MemoryEntry]:
     if ctx.store is None:
         return []
-    return ctx.store.active_entries(src, tgt, _SCOPES)  # type: ignore[union-attr]
+    return ctx.store.active_entries(  # type: ignore[attr-defined]
+        src, tgt, _SCOPES,
+        user_id=ctx.config.user_id, project_id=ctx.config.project_id,
+    )
 
 
 def _mask_invariant_locks(text: str, locks: list[MemoryEntry]) -> tuple[str, dict[str, str]]:
     """Protect invariant term locks by masking source spans to sentinels that restore
-    to the *target* form — morphologically safe and guarantees the locked term."""
+    to the *target* form — morphologically safe and preserves the locked term."""
     restore: dict[str, str] = {}
     work = text
     k = 0
@@ -170,7 +186,7 @@ def _record_applications(ctx: PipelineContext, entries: list[MemoryEntry], reque
     for e in entries:
         if e.id is not None:
             try:
-                ctx.store.record_application(e.id, request_id)  # type: ignore[union-attr]
+                ctx.store.record_application(e.id, request_id)  # type: ignore[attr-defined]
             except Exception:
                 pass
 
@@ -207,6 +223,7 @@ def fast_run(ctx: PipelineContext, *, text: str, src: str, tgt: str,
 # ------------------------------------------------------------- auto tiers
 def _triage(ctx: PipelineContext, source: str, lang_pair: str, domain: str,
             tracker: BudgetTracker, seg_idx: int, context_brief: str = "") -> dict:
+    assert ctx.llm is not None  # auto_run refuses to start without an LLM
     if not tracker.can_llm(seg_idx):
         raise BudgetExhausted(f"budget exhausted before triage at segment {seg_idx}")
     system, user = build_triage(source_text=source, lang_pair=lang_pair, domain=domain,
@@ -225,6 +242,7 @@ def _triage(ctx: PipelineContext, source: str, lang_pair: str, domain: str,
 def _translate_review(ctx: PipelineContext, source: str, lang_pair: str, memory_block: str,
                       domain: str, tracker: BudgetTracker, seg_idx: int,
                       context_brief: str = "") -> dict:
+    assert ctx.llm is not None
     if not tracker.can_llm(seg_idx):
         raise BudgetExhausted(f"budget exhausted before translate at segment {seg_idx}")
     system, user = build_translate_review(source_text=source, lang_pair=lang_pair,
@@ -244,6 +262,7 @@ def _translate_review(ctx: PipelineContext, source: str, lang_pair: str, memory_
 def _deep(ctx: PipelineContext, source: str, draft: str, memory_block: str, research: str,
           lang_pair: str, domain: str, tracker: BudgetTracker, seg_idx: int,
           context_brief: str = "") -> dict:
+    assert ctx.llm is not None
     if not tracker.can_llm(seg_idx):
         return {}  # no budget for the deep pass; keep the Sonnet result
     system, user = build_deep(source_text=source, draft=draft, lang_pair=lang_pair,
@@ -264,6 +283,7 @@ def _crosscheck(ctx: PipelineContext, source: str, translation: str, lang_pair: 
     """Independent English triangulation of a hard-case result. Uses the translate model
     (Sonnet) — a different tier than the Opus deep pass that produced the text — so the
     audit is genuinely independent, not the author grading itself."""
+    assert ctx.llm is not None
     if not tracker.can_llm(seg_idx):
         return {}
     system, user = build_crosscheck(source_text=source, translation=translation, lang_pair=lang_pair)
@@ -356,9 +376,24 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
 
     # ── tier 1: Haiku triage ──────────────────────────────────────────────
     tri = _triage(ctx, masked.text, lang_pair, domain, tracker, seg_idx, context_brief)
+    if not tri:
+        # malformed triage output: keep going with conservative defaults, but say so —
+        # and never trust a short-circuit off a tier that couldn't even emit JSON
+        warnings.append("分诊层返回了无法解析的输出,已按标准复杂度保守处理")
     detected = str(tri.get("detected_src") or src)
     domain = domain or str(tri.get("domain") or "")
     complexity = str(tri.get("complexity") or "standard")
+
+    # ── detect FIRST, then retrieve ───────────────────────────────────────
+    # The pre-triage retrieval ran with src possibly 'auto' (a wildcard: entries from
+    # EVERY language pair load). Now that language and domain are established, reload
+    # and re-scan so entries from unrelated language pairs or contradicted domains
+    # never reach the prompt or the guards.
+    if src in ("auto", "") and detected:
+        entries = _load_entries(ctx, detected, tgt)
+    ret = retrieval.retrieve(entries, text, {"domain": domain, "register": ctx.register.tone})
+    memory_block = inject.render_memory_block(ret.exact_locks, ret.exact_corrections,
+                                              ret.surfaced)
     tri_flagged = bool(tri.get("is_slang") or tri.get("has_ambiguity") or tri.get("has_cultural"))
     # Language ID is only trusted when the source was 'auto'; an explicit source is the caller's.
     src_conf = float(tri.get("src_confidence", 1.0) or 1.0)
@@ -402,19 +437,27 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
         tier = "sonnet"
         sv = _translate_review(ctx, masked.text, lang_pair, memory_block, domain, tracker,
                                seg_idx, context_brief)
-        translation = str(sv.get("translation") or masked.text)
-        conf = float(sv.get("self_confidence", 0.6) or 0.6)
+        translation = str(sv.get("translation") or "")
+        if not translation:
+            # fail closed: a tier that returned malformed/empty output produced NOTHING —
+            # never echo the source as a fake translation. Escalate; the deep tier (or
+            # the MT fallback below) must fill it.
+            warnings.append("翻译层返回了无法解析的输出,已升级处理")
+            conf = 0.0
+            need_deep = True
+        else:
+            conf = float(sv.get("self_confidence", 0.6) or 0.6)
+            need_deep = (
+                bool(sv.get("ambiguity") or sv.get("cultural") or (sv.get("risk_flags") or []))
+                or ret.landmine()
+                or conf < AUTO_FLOOR
+                or complexity == "hard"
+                or tri_flagged
+                or low_src_conf
+                or ill_formed
+            )
         for n in sv.get("notes", []) or []:
             notes.append(str(n))
-        need_deep = (
-            bool(sv.get("ambiguity") or sv.get("cultural") or (sv.get("risk_flags") or []))
-            or ret.landmine()
-            or conf < AUTO_FLOOR
-            or complexity == "hard"
-            or tri_flagged
-            or low_src_conf
-            or ill_formed
-        )
 
     # ── tier 3: Opus deep judgment (only when flagged) ────────────────────
     research_status: str | None = None
@@ -455,26 +498,79 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
     elif need_deep and not ctx.config.auto_deep:
         notes.append("detected a hard case but the deep (Opus) tier is disabled")
 
+    # ── fail closed: every LLM tier failed to produce a translation ───────
+    # Never echo the source and never invent: degrade to keyless MT when available,
+    # otherwise return an explicit empty DEGRADED result the caller can see.
+    degraded = False
+    if not translation:
+        if ctx.mt is not None and tracker.can_mt(seg_idx):
+            res = ctx.mt.translate(masked.text, src, tgt)
+            tracker.record_mt()
+            translation = res.text
+            degraded = True
+            warnings.append("LLM 各层输出均无法解析,已降级为机器直译结果,请人工核对")
+            progress.note("模型输出异常,降级为机器直译")
+        else:
+            warnings.append("LLM 各层输出均无法解析且无机器翻译后备,本次未产出译文")
+            return TranslationResult(
+                text="", mode="auto", confidence=0.0, status=Status.DEGRADED,
+                detected_src=detected, backend=getattr(ctx.llm, "name", ""),
+                request_id=request_id, notes=notes, warnings=warnings,
+                memory_hits=_hits(ret.exact_locks, ret.exact_corrections, ret.surfaced,
+                                  applied=False),
+                trace={"tier": tier, "detected_src": detected, "domain": domain or "general",
+                       "context_injected": bool(context_brief), "complexity": complexity,
+                       "need_deep": need_deep, "confidence": 0.0,
+                       "budget": tracker.summary()},
+            )
+
     # ── finalize: placeholders, term locks, deterministic reject-guard ────
+    ph_lost = bool(masked.mapping) and not placeholders_preserved(masked, translation)
     out = restore_placeholders(translation, masked.mapping)
-    out, _ = guard.apply_invariant_locks(out, [e for e in ret.exact_locks if e.invariant])
+    invariant_locks = [e for e in ret.exact_locks if e.invariant]
+    out, _ = guard.apply_invariant_locks(out, invariant_locks)
     out, guard_fixes = guard.enforce(out, ret.exact_corrections)
     notes += guard_fixes
+    # anything still violated after enforcement could not be rewritten — fail closed
+    residual = guard.find_violations(out, ret.exact_corrections)
+    missed_locks = guard.unsatisfied_locks(text, out, invariant_locks)
 
     exact_n = len(ret.exact_locks) + len(ret.exact_corrections)
     final_conf = min(1.0, conf + (0.05 if exact_n else 0.0))
     status = Status.OK if final_conf >= 0.5 else Status.UNCERTAIN
+    if degraded:
+        status = Status.DEGRADED
+        final_conf = min(final_conf, 0.35)
+    if ph_lost:
+        status = _worsen(status, Status.DEGRADED)
+        warnings.append("译文丢失了原文中的占位符/标记(模型未原样保留),请人工核对")
+    if residual:
+        status = _worsen(status, Status.DEGRADED)
+        warnings.append(
+            "更正记忆检测到被拒译法残留且无法自动替换:"
+            + "; ".join(f"'{v.rejected}'(entry #{v.entry.id})" for v in residual[:3])
+        )
+    if missed_locks:
+        status = _worsen(status, Status.DEGRADED)
+        warnings.append(
+            "术语锁未能在译文中生效:"
+            + "; ".join(f"'{e.source_text}'→'{e.accepted_translation}'" for e in missed_locks[:3])
+        )
+    if (normalize(out) == normalize(text) and len(text.split()) > 1):
+        # multi-word output identical to the source: almost certainly an untranslated echo
+        status = _worsen(status, Status.UNCERTAIN)
+        warnings.append("译文与原文完全相同,可能未完成翻译,请核对")
     if research_status in ("none", "insufficient") and tri_flagged:
-        status = Status.UNCERTAIN
+        status = _worsen(status, Status.UNCERTAIN)
         notes.append("需要联网核查但无搜索后端/结果不足,结果未经外部验证")
     if low_src_conf:
-        status = Status.UNCERTAIN
+        status = _worsen(status, Status.UNCERTAIN)
         notes.append(
             f"源语言判断存疑(detected={detected}, 置信度≈{src_conf:.2f});"
             "可能是专有名词、生造词或非自然语言,已按原样保留处理"
         )
     if ill_formed:
-        status = Status.UNCERTAIN
+        status = _worsen(status, Status.UNCERTAIN)
         msg = "源文本本身疑似有拼写/漏词或语法不通(可能是语音转写、不完整或非母语文本),原意无法确定;"
         if source_repair:
             msg += f"已按最可能的意思翻译。原文可能想表达:「{source_repair}」"
@@ -493,11 +589,11 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
         if src_unintelligible:
             # Agreement on an unintelligible source only means both readings share the same
             # hallucinated repair — never let it read as a clean pass.
-            status = Status.UNCERTAIN
+            status = _worsen(status, Status.UNCERTAIN)
             progress.note("英文交叉核对:源文本不通,无法据此确认语义")
             notes.append("英文交叉核对判定源文本不构成完整语义,译文的语义正确性无法核实")
         elif crosscheck.get("agree") is False:
-            status = Status.UNCERTAIN
+            status = _worsen(status, Status.UNCERTAIN)
             div = str(crosscheck.get("divergence") or "").strip()
             progress.note("英文交叉核对发现语义偏差,已标记待确认")
             notes.append(

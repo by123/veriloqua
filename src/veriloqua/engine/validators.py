@@ -41,6 +41,9 @@ def validate_fast(
 
     if normalize(source_text) == normalize(output_text) and src_script != out_script:
         warnings.append("output identical to input across differing scripts (possible echo)")
+    if (normalize(source_text) == normalize(output_text) and src_script == out_script
+            and src_script != "unknown" and len(source_text.split()) > 1):
+        warnings.append("multi-word output identical to input (untranslated echo?)")
     if src_script == out_script and src_script != "unknown" and _expect_script_change(detected_src, tgt_lang):
         warnings.append(f"output script ({out_script}) unchanged from source; expected a change")
 

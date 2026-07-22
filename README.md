@@ -1,5 +1,7 @@
 # Veriloqua
 
+English | [简体中文](README.zh-CN.md)
+
 **A self-improving translation engine that understands what people really mean.**
 
 Veriloqua translates for *meaning, tone, register, and cultural effect* — not word-swaps —

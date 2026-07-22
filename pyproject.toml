@@ -59,7 +59,7 @@ veriloqua-mcp = "veriloqua.mcp_server:main"
 packages = ["src/veriloqua"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/veriloqua", "tests", "README.md", "LICENSE"]
+include = ["src/veriloqua", "tests", "README.md", "README.zh-CN.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

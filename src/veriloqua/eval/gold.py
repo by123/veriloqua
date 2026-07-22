@@ -11,7 +11,8 @@ a build — the deterministic replay tier does.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 try:  # reference implementation, optional
     from sacrebleu.metrics import CHRF as _SacreCHRF
@@ -36,12 +37,12 @@ def _builtin_chrf(hypothesis: str, reference: str, *, char_order: int = 6,
     precisions: list[float] = []
     recalls: list[float] = []
     for n in range(1, char_order + 1):
-        h, r = _char_ngrams(hyp, n), _char_ngrams(ref, n)
-        if not h and not r:
+        h_grams, r_grams = _char_ngrams(hyp, n), _char_ngrams(ref, n)
+        if not h_grams and not r_grams:
             continue
-        overlap = sum((h & r).values())
-        precisions.append(overlap / max(1, sum(h.values())))
-        recalls.append(overlap / max(1, sum(r.values())))
+        overlap = sum((h_grams & r_grams).values())
+        precisions.append(overlap / max(1, sum(h_grams.values())))
+        recalls.append(overlap / max(1, sum(r_grams.values())))
     if not precisions:
         return 0.0
     p = sum(precisions) / len(precisions)

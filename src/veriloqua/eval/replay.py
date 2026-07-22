@@ -12,8 +12,9 @@ Merges packaged seed fixtures with the USER replay dir and runs the two tiers:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from veriloqua._norm import normalize
 from veriloqua.memory import guard

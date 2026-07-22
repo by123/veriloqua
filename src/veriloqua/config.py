@@ -14,7 +14,12 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-import tomllib
+import sys
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python 3.10: stdlib tomllib arrived in 3.11; tomli is the official backport
+    import tomli as tomllib
 
 APP = "veriloqua"
 

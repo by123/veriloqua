@@ -28,10 +28,10 @@ classifiers = [
     "Topic :: Text Processing :: Linguistic",
 ]
 
-# The ONLY required runtime dependency. `pip install veriloqua` stays a
-# seconds-long, ML-free install: fast mode + the deterministic self-learning
-# core need nothing else. Everything heavier is an opt-in extra below.
-dependencies = ["httpx>=0.24"]
+# Minimal runtime dependencies. `pip install veriloqua` stays a seconds-long,
+# ML-free install: fast mode + the deterministic self-learning core need nothing
+# else. tomli is the tiny stdlib-tomllib backport, pulled in on 3.10 only.
+dependencies = ["httpx>=0.24", "tomli>=2.0; python_version < '3.11'"]
 
 [project.urls]
 Homepage = "https://github.com/veriloqua/veriloqua"

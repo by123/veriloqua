@@ -24,7 +24,7 @@ from veriloqua.lang.register import Register, RegisterProfile
 from veriloqua.modes import Mode
 from veriloqua.result import FastResult, TranslationResult
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "translate",

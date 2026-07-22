@@ -2,23 +2,19 @@
 
 A correction enters ONLY here (via ``tr.correct()`` / ``vq correct``) — never from
 source text, never from an autonomous fast/medium path. The exact-match never-repeat
-core needs ZERO LLM calls; an optional ``enricher`` only widens fuzzy recall by
+core needs ZERO LLM calls and runs entirely on deterministic string handling by
 classifying the MQM error type and refining APPLIES-WHEN.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from veriloqua._norm import normalize
 from veriloqua.memory.records import Kind, MemoryEntry, Provenance, Scope, Status
 from veriloqua.taxonomy import UNSPECIFIED
-
-# (source, our_output, corrected) -> (error_type, applies_when)
-Enricher = Callable[[str, str, str], tuple[str, str]]
 
 
 def _applies_when(ctx: dict[str, str]) -> str:
@@ -41,10 +37,9 @@ def ingest_correction(
     scope_id: str = "",
     note: str = "",
     provenance: Provenance = Provenance.USER_CORRECTION,
-    enricher: Enricher | None = None,
     replay_dir: str | Path | None = None,
 ) -> MemoryEntry:
-    """File a correction. Stores our output as a rejected rendering (the never-repeat
+    """File a correction. Stores our output as a rejected rendering (the reject-guard
     payload), keyed on the normalized source span."""
     source_norm = normalize(source_text)
     ctx: dict[str, str] = {}
@@ -55,12 +50,6 @@ def ingest_correction(
 
     error_type = UNSPECIFIED
     applies_when = _applies_when(ctx)
-    if enricher is not None:
-        try:
-            error_type, refined = enricher(source_text, our_output, corrected)
-            applies_when = refined or applies_when
-        except Exception:  # enrichment is best-effort; never block the write path
-            error_type = UNSPECIFIED
 
     rejected: list[str] = []
     if our_output and normalize(our_output) != normalize(corrected):

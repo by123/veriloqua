@@ -1,9 +1,9 @@
 """PII minimization.
 
 Honest scope: local-only storage, minimal spans, and hashing are the real
-guarantees. The default regex scrubber removes obviously-sensitive tokens
-(emails, long digit runs, key-shaped strings). We do NOT claim regex/NER removes
-PII from free prose — an optional NER scrubber ([scrub] extra) is a booster.
+mechanisms. The regex scrubber removes obviously-sensitive tokens (emails, long
+digit runs, key-shaped strings). We do NOT claim regex removes PII from free
+prose; there is no NER scrubbing.
 """
 
 from __future__ import annotations

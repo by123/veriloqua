@@ -1,6 +1,6 @@
 """The MemoryStore Protocol. The default implementation is
-``store_sqlite.SqliteMemoryStore``; alternate stores register via the
-``veriloqua.memory_stores`` entry-point group."""
+``store_sqlite.SqliteMemoryStore``; alternate stores are wired in explicitly via
+``Translator(store=...)``."""
 
 from __future__ import annotations
 

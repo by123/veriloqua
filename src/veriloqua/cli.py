@@ -329,6 +329,12 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 def _cmd_backends(args: argparse.Namespace) -> int:
+    """Report whether each backend is USABLE by the engine right now — not merely
+    whether a Python package happens to be installed."""
+    import shutil
+
+    from veriloqua.config import load_config
+
     def available(mod: str) -> bool:
         import importlib.util
 
@@ -337,20 +343,22 @@ def _cmd_backends(args: argparse.Namespace) -> int:
         except (ImportError, ValueError):
             return False
 
-    import shutil
+    cfg = load_config()
+
+    if cfg.no_third_party or not cfg.allow_third_party:
+        google = "no — disabled by the third-party consent guard"
+    else:
+        google = "yes (keyless, built-in)"
 
     rows = [
-        ("llm/claude_cli", "Claude Code `claude -p`", "yes" if shutil.which("claude") else "install Claude Code + log in"),
-        ("translation/google_free", "keyless Google (built-in)", "yes"),
-        ("translation/deepl", "DeepL", "yes" if available("deepl") else "pip install veriloqua[deepl]"),
-        ("translation/google_cloud", "Google Cloud", "yes" if available("google.cloud.translate") else "pip install veriloqua[google]"),
-        ("llm/anthropic", "Anthropic", "yes" if available("anthropic") else "pip install veriloqua[anthropic]"),
-        ("llm/openai", "OpenAI", "yes" if available("openai") else "pip install veriloqua[openai]"),
-        ("embedding/sentence_transformers", "local embeddings", "yes" if available("sentence_transformers") else "pip install veriloqua[embeddings]"),
-        ("fuzzy/rapidfuzz", "lexical surfacing", "rapidfuzz" if available("rapidfuzz") else "difflib (stdlib fallback)"),
+        ("llm/claude_cli", "Claude Code `claude -p`",
+         "yes" if shutil.which("claude") else "no — install Claude Code and log in"),
+        ("translation/google_free", "keyless Google", google),
+        ("fuzzy/rapidfuzz", "lexical surfacing",
+         "rapidfuzz" if available("rapidfuzz") else "difflib (stdlib fallback)"),
     ]
     for name, desc, status in rows:
-        print(f"{name:38}  {desc:22}  {status}")
+        print(f"{name:26}  {desc:24}  usable: {status}")
     return 0
 
 
@@ -364,9 +372,64 @@ def _cmd_config(args: argparse.Namespace) -> int:
         else:
             print(repr(cfg))
     elif args.action == "set":
-        print("Set VERILOQUA_* env vars or edit the TOML at "
-              f"{cfg.config_dir / 'config.toml'} — e.g.:\n  {args.key} = \"{args.value}\"",
+        return _config_set(args.key, args.value)
+    return 0
+
+
+def _toml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    s = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{s}"'
+
+
+def _config_set(key: str, raw: str) -> int:
+    """Validate the key against Config fields, coerce the value to the field's current
+    type, and persist it into config.toml (merging with what is already there)."""
+    import dataclasses
+    import os as _os
+
+    from veriloqua.config import Config, _load_toml, load_config
+
+    cfg = load_config()
+    known = {f.name for f in dataclasses.fields(Config)}
+    if key not in known:
+        print(f"vq: error: unknown config key '{key}' — run `vq config get` to list keys",
               file=sys.stderr)
+        return 1
+
+    current = getattr(cfg, key)
+    try:
+        value: Any
+        if isinstance(current, bool):
+            low = raw.strip().lower()
+            if low not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+                raise ValueError(f"expected a boolean, got {raw!r}")
+            value = low in ("1", "true", "yes", "on")
+        elif isinstance(current, int) and not isinstance(current, bool):
+            value = int(raw)
+        elif isinstance(current, float):
+            value = float(raw)
+        else:  # str, Path, or optional-str fields: store the raw string
+            value = raw
+    except ValueError as exc:
+        print(f"vq: error: invalid value for '{key}': {exc}", file=sys.stderr)
+        return 1
+
+    toml_path = cfg.config_dir / "config.toml"
+    existing = _load_toml(toml_path)
+    existing[key] = value
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    lines = ["# Veriloqua configuration (managed by `vq config set`; comments are not kept)"]
+    lines += [f"{k} = {_toml_scalar(v)}" for k, v in sorted(existing.items())]
+    toml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:  # the file can hold model names or keys — keep it owner-only
+        _os.chmod(toml_path, 0o600)
+    except OSError:
+        pass
+    print(f"set {key} = {_toml_scalar(value)}  ({toml_path})")
     return 0
 
 

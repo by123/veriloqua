@@ -90,3 +90,45 @@ def test_errors_are_one_clean_line(iso_env, capsys):
     err = capsys.readouterr().err
     assert err.startswith("vq: error:")
     assert "Traceback" not in err
+
+
+def test_config_set_writes_and_roundtrips(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.delenv("VERILOQUA_CONFIG", raising=False)
+
+    rc = cli.main(["config", "set", "auto_crosscheck", "false"])
+    assert rc == 0
+    assert "auto_crosscheck = false" in capsys.readouterr().out
+
+    from veriloqua.config import load_config
+    assert load_config().auto_crosscheck is False       # persisted and re-read
+
+    rc = cli.main(["config", "set", "max_calls", "7"])
+    assert rc == 0
+    cfg = load_config()
+    assert cfg.max_calls == 7
+    assert cfg.auto_crosscheck is False                 # earlier key survives the merge
+
+
+def test_config_set_rejects_unknown_key_and_bad_value(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.delenv("VERILOQUA_CONFIG", raising=False)
+
+    assert cli.main(["config", "set", "no_such_key", "1"]) == 1
+    assert "unknown config key" in capsys.readouterr().err
+    assert cli.main(["config", "set", "max_calls", "not-a-number"]) == 1
+    assert "invalid value" in capsys.readouterr().err
+
+
+def test_backends_reports_usability(capsys, monkeypatch):
+    assert cli.main(["backends"]) == 0
+    out = capsys.readouterr().out
+    assert "usable:" in out
+    assert "llm/claude_cli" in out and "translation/google_free" in out
+    # the consent guard must flip google_free to not-usable
+    monkeypatch.setenv("VERILOQUA_NO_THIRD_PARTY", "1")
+    assert cli.main(["backends"]) == 0
+    out = capsys.readouterr().out
+    google_line = next(line for line in out.splitlines() if "google_free" in line)
+    assert "usable: no" in google_line

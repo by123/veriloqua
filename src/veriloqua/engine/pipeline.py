@@ -69,6 +69,7 @@ class PipelineContext:
     config: Config
     mt: TranslationBackend | None = None
     llm: LLMBackend | None = None
+    judge_llm: LLMBackend | None = None         # independent cross-check backend (optional)
     triage_model: str = ""
     translate_model: str = ""
     deep_model: str = ""
@@ -280,10 +281,13 @@ def _deep(ctx: PipelineContext, source: str, draft: str, memory_block: str, rese
 
 def _crosscheck(ctx: PipelineContext, source: str, translation: str, lang_pair: str,
                 tracker: BudgetTracker, seg_idx: int) -> dict:
-    """Independent English triangulation of a hard-case result. Uses the translate model
-    (Sonnet) — a different tier than the Opus deep pass that produced the text — so the
-    audit is genuinely independent, not the author grading itself."""
-    assert ctx.llm is not None
+    """English triangulation of a hard-case result. When a separate ``judge_llm`` is
+    configured it runs there — a genuinely independent reviewer. Otherwise it falls back
+    to the main backend on the translate tier (a different model than the Opus deep pass
+    that produced the text, but the same vendor/backend) — and the trace reports
+    ``independent`` honestly so same-backend auditing is never dressed up as independent."""
+    llm = ctx.judge_llm or ctx.llm
+    assert llm is not None
     if not tracker.can_llm(seg_idx):
         return {}
     system, user = build_crosscheck(source_text=source, translation=translation, lang_pair=lang_pair)
@@ -291,10 +295,14 @@ def _crosscheck(ctx: PipelineContext, source: str, translation: str, lang_pair: 
         "英文回译交叉核对语义…",
         "比对极性、语气与主语是否一致…",
     ]):
-        resp = ctx.llm.complete(system, user, model=ctx.translate_model, effort="low",
-                                max_tokens=1024)
+        resp = llm.complete(system, user, model=ctx.translate_model, effort="low",
+                            max_tokens=1024)
     tracker.record_llm(resp)
-    return parse_json_object(resp.text)
+    verdict = parse_json_object(resp.text)
+    if verdict:
+        verdict["independent"] = ctx.judge_llm is not None
+        verdict["backend"] = getattr(llm, "name", "")
+    return verdict
 
 
 def _maybe_learn(ctx: PipelineContext, deep_data: dict, src: str, tgt: str, domain: str,
@@ -327,8 +335,8 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
              context_brief: str = "") -> TranslationResult:
     if ctx.llm is None:
         raise BackendNotConfigured(
-            "auto mode needs an LLM backend — a logged-in claude CLI or an API key "
-            "(pip install veriloqua[anthropic] + ANTHROPIC_API_KEY); or use --mode fast"
+            "auto mode needs an LLM backend — install Claude Code and log in "
+            "(`claude`), inject llm_backend=..., or use --mode fast"
         )
     notes: list[str] = []
     warnings: list[str] = []
@@ -466,7 +474,12 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
         tier = "opus"
         progress.note("译文有疑点,升级到深度校验")
         research_text = ""
-        if ctx.search is not None:
+        if ctx.search is None:
+            # no search backend configured: a flagged case (slang/culture/ambiguity)
+            # cannot be web-verified — that must read as MORE uncertain than not
+            # needing verification at all, never as a silent pass
+            research_status = "unavailable"
+        else:
             progress.note("开始联网搜索,查证释义与用例…")
             try:
                 results = ctx.search.search(text, max_results=5)
@@ -560,7 +573,7 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
         # multi-word output identical to the source: almost certainly an untranslated echo
         status = _worsen(status, Status.UNCERTAIN)
         warnings.append("译文与原文完全相同,可能未完成翻译,请核对")
-    if research_status in ("none", "insufficient") and tri_flagged:
+    if research_status in ("unavailable", "none", "insufficient") and tri_flagged:
         status = _worsen(status, Status.UNCERTAIN)
         notes.append("需要联网核查但无搜索后端/结果不足,结果未经外部验证")
     if low_src_conf:
@@ -617,7 +630,9 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
         "research_status": research_status,
         "crosscheck": {"agree": crosscheck.get("agree"),
                        "source_intelligible": crosscheck.get("source_intelligible"),
-                       "divergence": crosscheck.get("divergence")} if crosscheck else None,
+                       "divergence": crosscheck.get("divergence"),
+                       "independent": crosscheck.get("independent", False),
+                       "backend": crosscheck.get("backend", "")} if crosscheck else None,
         "learned_entry_id": learned_id,
         "confidence": final_conf,
         "fuzzy_backend": ret.fuzzy_backend,

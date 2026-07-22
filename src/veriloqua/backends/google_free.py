@@ -4,8 +4,9 @@ Unofficial and IP-rate-limited. It is wrapped so it (a) never returns garbage or
 echoes the input as a fake translation, and (b) fails once with an actionable error
 under rate-limiting instead of a per-segment wall of uncertainty. It works with no
 setup and no key; a one-time transparent notice is printed on first use, and
-``no_third_party`` hard-disables it. One-line swap to the keyed Cloud Translation /
-DeepL backends for volume/production use.
+``no_third_party`` hard-disables it. Built for SHORT texts (<= MAX_FREE_CHARS); for
+volume or production use, configure an LLM backend or inject your own
+``TranslationBackend`` via ``Translator(mt_backend=...)``.
 """
 
 from __future__ import annotations
@@ -21,9 +22,14 @@ from veriloqua.errors import (
     NetworkUnavailable,
     RateLimited,
     ThirdPartyConsentRequired,
+    VeriloquaError,
 )
 
 _ENDPOINT = "https://translate.googleapis.com/translate_a/single"
+
+# The free endpoint is built for short texts. Past this we refuse with a clear error
+# instead of producing truncated/failed requests (the official API caps around 5k).
+MAX_FREE_CHARS = 5000
 _NOTICE = (
     "veriloqua: fast mode uses the free public Google Translate endpoint (your text is "
     "sent to Google). Set VERILOQUA_NO_THIRD_PARTY=1 to disable, or use a local agent "
@@ -80,19 +86,27 @@ class GoogleFreeBackend:
                 "google_free is rate-limited (circuit open) — configure a keyed backend."
             )
         self._ensure_consent()
+        if len(text) > MAX_FREE_CHARS:
+            raise VeriloquaError(
+                f"text is {len(text)} chars; the free MT path accepts at most "
+                f"{MAX_FREE_CHARS}. Split the input into smaller pieces or configure "
+                "an LLM backend (auto mode)."
+            )
 
+        # the text rides in the POST body — never in the URL, so it cannot leak into
+        # proxy/server access logs and long inputs cannot overflow the URL (414)
         params = {
             "client": "gtx",
             "sl": src_lang or "auto",
             "tl": tgt_lang,
             "dt": "t",
-            "q": text,
         }
+        body = {"q": text}
         delay = 0.5
         last_exc: Exception | None = None
         for attempt in range(self.max_retries):
             try:
-                resp = self._http().get(_ENDPOINT, params=params)
+                resp = self._http().post(_ENDPOINT, params=params, data=body)
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 raise NetworkUnavailable("cannot reach the translation endpoint") from exc
             except httpx.HTTPError as exc:

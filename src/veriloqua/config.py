@@ -1,8 +1,8 @@
 """Configuration resolution and paths.
 
 Precedence (highest first): explicit constructor arg > ``VERILOQUA_*`` env >
-provider-native env (``ANTHROPIC_API_KEY`` etc.) > TOML config file > built-in
-defaults. API keys are redacted in ``repr`` so a logged Config never leaks a secret.
+TOML config file > built-in defaults. Secret-looking fields are redacted in
+``repr`` so a logged Config never leaks one.
 """
 
 from __future__ import annotations
@@ -73,21 +73,16 @@ class Config:
     config_dir: Path = field(default_factory=_config_home)
 
     # --- backends / models ---
-    # "claude_cli" | "anthropic" | "openai" | None (auto-detect).
-    # Auto-detect prefers a locally-installed Claude Code CLI (claude) so auto mode
-    # works with ZERO config and NO API key; API-key SDK backends are the fallback.
-    llm_provider: str | None = None
-    # The tiered `auto` pipeline uses three models. Over the agent CLI these map to
-    # `--model haiku`/`sonnet`/`opus`; SDK backends use the ids directly.
+    # The LLM backend is the locally logged-in Claude Code CLI (auto-detected); an
+    # alternate backend can only be injected explicitly via Translator(llm_backend=...).
+    # The tiered `auto` pipeline uses three models, mapped to the CLI aliases
+    # `--model haiku`/`sonnet`/`opus`.
     triage_model: str = "claude-haiku-4-5"     # Haiku: detect / classify / route / simple
     translate_model: str = "claude-sonnet-5"   # Sonnet: translate + self-review (80-90%)
     deep_model: str = "claude-opus-4-8"        # Opus: hard cases, escalation only
     auto_deep: bool = True                     # allow escalation to the Opus deep pass
     auto_crosscheck: bool = True               # on hard cases, triangulate meaning via English
     auto_mt_shortcircuit: bool = True          # tier 0: trivial short inputs answer via keyless MT
-    sdk_model: str = "claude-haiku-4-5"        # default model for API-key SDK backends
-    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    api_key: str | None = None                 # resolved from provider-native env if None
     # Optional model to pass to the agent CLI (`claude -p --model ...`). Default None
     # → let the CLI use whatever model it is already configured with (true zero-config).
     cli_model: str | None = None
@@ -156,16 +151,6 @@ class Config:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.replay_dir.mkdir(parents=True, exist_ok=True)
 
-    def resolved_api_key(self) -> str | None:
-        if self.api_key:
-            return self.api_key
-        provider = self.llm_provider or _detect_provider()
-        if provider == "anthropic":
-            return os.environ.get("ANTHROPIC_API_KEY")
-        if provider == "openai":
-            return os.environ.get("OPENAI_API_KEY")
-        return None
-
     def __repr__(self) -> str:  # redact secrets
         parts = []
         for f in fields(self):
@@ -174,14 +159,6 @@ class Config:
                 val = "***redacted***"
             parts.append(f"{f.name}={val!r}")
         return f"Config({', '.join(parts)})"
-
-
-def _detect_provider() -> str | None:
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "anthropic"
-    if os.environ.get("OPENAI_API_KEY"):
-        return "openai"
-    return None
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -208,14 +185,10 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
 
     # layer 2: VERILOQUA_* env
     env_map = {
-        "VERILOQUA_LLM_PROVIDER": "llm_provider",
         "VERILOQUA_TRIAGE_MODEL": "triage_model",
         "VERILOQUA_TRANSLATE_MODEL": "translate_model",
         "VERILOQUA_DEEP_MODEL": "deep_model",
-        "VERILOQUA_SDK_MODEL": "sdk_model",
-        "VERILOQUA_EMBED_MODEL": "embed_model",
         "VERILOQUA_CLI_MODEL": "cli_model",
-        "VERILOQUA_API_KEY": "api_key",
         "VERILOQUA_DEFAULT_MODE": "default_mode",
         "VERILOQUA_USER_ID": "user_id",
         "VERILOQUA_PROJECT_ID": "project_id",

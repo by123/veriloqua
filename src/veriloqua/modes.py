@@ -44,7 +44,7 @@ class ModePolicy:
     use_llm: bool
     glossary_apply: bool             # deterministic term locks applied
     apply_corrections: bool          # exact corrections auto-applied (never in fast)
-    memory_read: bool                # semantic/fuzzy surfacing tiers read
+    memory_read: bool                # lexical-fuzzy surfacing tier read
     memory_write: MemoryWrite
     verify: bool                     # CoVe / back-translation / judge
     web_research: bool

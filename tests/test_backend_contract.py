@@ -24,8 +24,6 @@ def _optional(module: str, cls: str):
 LLM_CLASSES = [c for c in (
     fakes.FakeLLMBackend,
     _optional("veriloqua.backends.llm_cli", "CliLLMBackend"),
-    _optional("veriloqua.backends.llm_anthropic", "AnthropicBackend"),
-    _optional("veriloqua.backends.llm_openai", "OpenAIBackend"),
 ) if c is not None]
 
 

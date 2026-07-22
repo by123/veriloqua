@@ -66,59 +66,21 @@ class Translator:
         )
 
     def _llm(self) -> LLMBackend | None:
-        """Resolve an LLM backend with ZERO config where possible.
-
-        Order: explicit backend → explicitly-selected provider → auto-detect a local
-        agent CLI (`claude`, no API key) → API-key SDK backend → None.
-        """
+        """Resolve the LLM backend with zero config: an explicitly injected backend
+        wins; otherwise the locally logged-in Claude Code CLI is auto-detected. No
+        API-key/SDK path exists — inject your own ``LLMBackend`` for anything else."""
         if self._explicit_llm is not None:
             return self._explicit_llm
-
-        provider = self.config.llm_provider
-        if provider == "claude_cli":
-            from veriloqua.backends.llm_cli import CliLLMBackend
-
-            try:
-                return CliLLMBackend(provider, model=self.config.cli_model)
-            except BackendNotConfigured:
-                return None
-        if provider in ("anthropic", "openai"):
-            return self._sdk_llm(provider)
-
-        # auto-detect (zero config): a logged-in agent CLI beats needing an API key.
         from veriloqua.backends.llm_cli import CliLLMBackend
 
-        cli = CliLLMBackend.detect(model=self.config.cli_model)
-        if cli is not None:
-            return cli
-        return self._sdk_llm(None)
-
-    def _sdk_llm(self, provider: str | None) -> LLMBackend | None:
-        key = self.config.resolved_api_key()
-        if provider is None:
-            from veriloqua.config import _detect_provider
-
-            provider = _detect_provider()
-        if not (provider and key):
-            return None
-        try:
-            if provider == "anthropic":
-                from veriloqua.backends.llm_anthropic import AnthropicBackend
-
-                return AnthropicBackend(api_key=key, model=self.config.sdk_model)
-            if provider == "openai":
-                from veriloqua.backends.llm_openai import OpenAIBackend
-
-                return OpenAIBackend(api_key=key, model=self.config.sdk_model)
-        except BackendNotConfigured:
-            return None
-        return None
+        return CliLLMBackend.detect(model=self.config.cli_model)
 
     def _context(self, mode: Mode, domain: str, llm: LLMBackend | None) -> pl.PipelineContext:
         return pl.PipelineContext(
             config=self.config,
             mt=self._mt(),
             llm=llm,
+            judge_llm=self._explicit_judge,
             triage_model=self.config.triage_model,
             translate_model=self.config.translate_model,
             deep_model=self.config.deep_model,

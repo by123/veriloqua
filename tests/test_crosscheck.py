@@ -47,12 +47,50 @@ def test_crosscheck_flags_meaning_drift(tmp_config):
     tr.close()
 
 
-def test_crosscheck_passes_when_consistent(tmp_config):
+class _FakeSearch:
+    def search(self, query: str, max_results: int = 5) -> list[dict]:
+        return [{"snippet": "meaning attested in source A"},
+                {"snippet": "meaning attested in source B"}]
+
+
+def test_flagged_case_without_search_backend_is_uncertain(tmp_config):
+    # a flagged (ambiguous) case with NO search backend cannot be web-verified —
+    # crosscheck agreement alone must not read as a clean pass
     tr = Translator(config=tmp_config, mt_backend=FakeMTBackend(),
                     llm_backend=_HardButConsistentLLM())
     r = tr.translate("una frase difícil", to="zh", mode="auto")
     assert r.trace["crosscheck"]["agree"] is True
+    assert r.trace["research_status"] == "unavailable"
+    assert r.status.value == "uncertain"
+    assert any("未经外部验证" in n for n in r.notes)
+    tr.close()
+
+
+def test_crosscheck_passes_when_consistent_and_researched(tmp_config):
+    tr = Translator(config=tmp_config, mt_backend=FakeMTBackend(),
+                    llm_backend=_HardButConsistentLLM(), search_backend=_FakeSearch())
+    r = tr.translate("una frase difícil", to="zh", mode="auto")
+    assert r.trace["crosscheck"]["agree"] is True
+    assert r.trace["research_status"] == "web_verified"
     assert r.status.value == "ok"
+    tr.close()
+
+
+def test_crosscheck_reports_independence_honestly(tmp_config):
+    # same-backend crosscheck must NOT claim independence; a separate judge backend does
+    tr = Translator(config=tmp_config, mt_backend=FakeMTBackend(),
+                    llm_backend=_HardButConsistentLLM(), search_backend=_FakeSearch())
+    r = tr.translate("una frase difícil", to="zh", mode="auto")
+    assert r.trace["crosscheck"]["independent"] is False
+    tr.close()
+
+    judge = FakeLLMBackend()
+    tr = Translator(config=tmp_config, mt_backend=FakeMTBackend(),
+                    llm_backend=_HardButConsistentLLM(), judge_backend=judge,
+                    search_backend=_FakeSearch())
+    r = tr.translate("una frase difícil", to="zh", mode="auto")
+    assert r.trace["crosscheck"]["independent"] is True
+    assert judge.calls > 0                      # the judge backend actually ran
     tr.close()
 
 

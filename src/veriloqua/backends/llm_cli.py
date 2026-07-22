@@ -84,7 +84,7 @@ class CliLLMBackend:
         if not self._bin:
             raise BackendNotConfigured(
                 f"'{spec['bin']}' CLI not found on PATH — {spec['hint']}, "
-                "or configure an API-key backend / use mode='fast'."
+                "or use mode='fast'."
             )
 
     @classmethod

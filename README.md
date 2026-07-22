@@ -10,8 +10,8 @@ from recurring on exact-span matches in the same context.
 
 - **`fast`** uses Google's public translation endpoint directly (keyless).
 - **`auto`** (the default) runs a tiered LLM cascade through a **locally logged-in
-  Claude Code CLI** (`claude -p`) as a background subprocess. No `ANTHROPIC_API_KEY`,
-  no SDK. With no LLM available it degrades to the keyless fast path.
+  Claude Code CLI** (`claude -p`) as a background subprocess — no API keys, no vendor
+  SDK. With no LLM available it degrades to the keyless fast path.
 
 ```bash
 pip install veriloqua
@@ -31,9 +31,6 @@ print(r.text, r.confidence)
 tr.correct(r.request_id, "祝你好运")
 ```
 
-> API keys are still supported (`pip install veriloqua[anthropic]` + `ANTHROPIC_API_KEY`,
-> or `[openai]`) and take over automatically if you'd rather use the SDK — but they are never required.
-
 ---
 
 ## Two modes, one API
@@ -41,18 +38,17 @@ tr.correct(r.request_id, "祝你好运")
 | Mode | What it does | Needs | Typical speed |
 |------|--------------|-------|---------------|
 | **`fast`** | Google Translate directly + invariant term locks | nothing (keyless) | <1s |
-| **`auto`** (default) | Tiered LLM cascade: trivial inputs via keyless MT (<1s, zero LLM calls) → Haiku triage → Sonnet translate + self-review → Opus deep judgment on hard cases, with correction memory and a deterministic reject-guard | agent CLI **or** API key (else degrades to fast) | <1s trivial · ~10-30s per LLM tier over an agent CLI · ~2-10s over an API key |
+| **`auto`** (default) | Tiered LLM cascade: trivial inputs via keyless MT (<1s, zero LLM calls) → Haiku triage → Sonnet translate + self-review → Opus deep judgment on hard cases, with correction memory and a deterministic reject-guard | a logged-in Claude Code CLI (else degrades to fast) | <1s trivial · ~10-30s per LLM tier |
 
 Pick per call: `translate(text, to="ja", mode="fast"|"auto")`.
 
 ### Speed expectations (typical, not guaranteed)
 
-Over a local **agent CLI** (`claude -p`), every call cold-boots a full agent (~7s) and the
-model's thinking time varies by input, so per-tier latencies vary — a hard idiom that
-escalates through all three tiers can take ~40s. Latencies here are typical observations,
-not ceilings. An **API key** removes the boot cost (the SDK path is used automatically when
-`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is set). `VERILOQUA_PROGRESS=1` shows per-call
-progress so a run never looks hung.
+Over the local **Claude Code CLI** (`claude -p`), every call cold-boots a full agent (~7s)
+and the model's thinking time varies by input, so per-tier latencies vary — a hard idiom
+that escalates through all three tiers can take ~40s. Latencies here are typical
+observations, not ceilings. `VERILOQUA_PROGRESS=1` shows per-call progress so a run never
+looks hung.
 
 ## Correction memory: teach it once, deterministically enforced
 
@@ -74,8 +70,7 @@ tr.correct(r.request_id, "云端")                          # the accepted rende
   a violation it cannot rewrite, the result is **degraded, never silently OK**.
 - **Scope of the claim:** enforcement is exact-span, same-context. Paraphrases of a mistake
   are the model's job (the correction is injected into the prompt), not the guard's.
-- **It works with zero LLM keys.** `vq correct` and the deterministic core need no API key;
-  an optional model call only *widens* fuzzy recall.
+- **It works with zero LLM keys.** `vq correct` and the deterministic core need no API key.
 
 ### Anti-overfit by design
 
@@ -129,27 +124,26 @@ A regex scrubber redacts obvious secrets; we don't claim it removes PII from fre
 
 ## Configuration
 
-Resolution order: constructor arg → `VERILOQUA_*` env → provider-native env
-(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) → TOML (`~/.config/veriloqua/config.toml`) → defaults.
+Resolution order: constructor arg → `VERILOQUA_*` env → TOML
+(`~/.config/veriloqua/config.toml`) → defaults.
 
 Nothing is required. Everything below is optional.
 
 | Key | Purpose |
 |-----|---------|
-| `VERILOQUA_LLM_PROVIDER` | force a backend: `claude_cli` \| `anthropic` \| `openai` (default: auto-detect, Claude CLI first) |
-| `VERILOQUA_CLI_MODEL` | model to pass to the agent CLI (`claude -p --model …`); default lets the CLI use its own model |
+| `VERILOQUA_CLI_MODEL` | model to pass to the Claude CLI (`claude -p --model …`); default lets the CLI use its own model |
 | `VERILOQUA_TRIAGE_MODEL` / `VERILOQUA_TRANSLATE_MODEL` / `VERILOQUA_DEEP_MODEL` | the three cascade tier models |
-| `VERILOQUA_SDK_MODEL` | default model for API-key SDK backends |
 | `VERILOQUA_NO_THIRD_PARTY` | hard-disable the keyless Google path (fast mode is allowed by default) |
 | `VERILOQUA_QUIET` | silence the one-time third-party notice |
 | `VERILOQUA_MAX_COST` / `VERILOQUA_MAX_CALLS` | per-job budget ceilings |
 
 ### Budgets
 
-Every mode enforces per-segment **and** per-job ceilings (calls / tokens / wall-clock /
+Every request enforces per-segment **and** per-job ceilings (calls / tokens / wall-clock /
 est. cost). On exhaustion the engine stops and returns the best result so far (or the
-keyless fast path), marked degraded with a clear reason, so a large file cannot silently
-run up an unbounded bill.
+keyless fast path), marked degraded with a clear reason. Note: `translate()` processes a
+single text segment per call — there is no multi-document batching pipeline; the job
+ceilings bound the calls made within one request.
 
 ## Backends
 
@@ -158,12 +152,8 @@ nothing to `pip install`, no key. The core install depends only on `httpx`. Ever
 is an optional alternative or upgrade:
 
 ```bash
-pip install veriloqua[anthropic]   # API-key LLM backend (alternative to the agent CLI)
-pip install veriloqua[openai]      # API-key LLM + API embeddings
-pip install veriloqua[deepl]       # production MT swap
-pip install veriloqua[google]      # Google Cloud Translation (keyed, rate-stable)
-pip install veriloqua[embeddings]  # local semantic-recall booster (surfaces candidates only)
 pip install veriloqua[rapidfuzz]   # faster fuzzy surfacing (difflib fallback otherwise)
+pip install veriloqua[eval]        # sacrebleu chrF for `vq eval --suite gold`
 pip install veriloqua[cli]         # rich CLI
 pip install veriloqua[all]
 ```

@@ -49,15 +49,6 @@ class LLMBackend(Protocol):
 
 
 @runtime_checkable
-class EmbeddingBackend(Protocol):
-    name: str
-    model: str
-    dim: int
-
-    def embed(self, texts: list[str]) -> list[list[float]]: ...
-
-
-@runtime_checkable
 class SearchBackend(Protocol):
     name: str
 

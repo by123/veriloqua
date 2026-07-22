@@ -1,10 +1,10 @@
-"""Three-stage retrieval.
+"""Two-stage retrieval.
 
 Stage 1 (EXACT) is a deterministic normalized-span scan over active exact-key
 spans — the ONLY tier that auto-applies and the ONLY tier that feeds the
-deterministic reject-guard. Stages 2 (lexical) and 3 (semantic) only SURFACE candidates
-for the prompt; they never blind-substitute and never affect the guard's verdict, so the
-verdict is identical whether or not ``rapidfuzz`` / embeddings are installed.
+deterministic reject-guard. Stage 2 (lexical fuzzy) only SURFACES candidates for the
+prompt; it never blind-substitutes and never affects the guard's verdict, so the
+verdict is identical whether or not ``rapidfuzz`` is installed.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def tags_contradicted(entry_tags: dict[str, str], ctx: dict[str, str]) -> bool:
 @dataclass(slots=True)
 class Surfaced:
     entry: MemoryEntry
-    tier: str          # exact | lexical | semantic
+    tier: str          # exact | lexical
     similarity: float
 
 
@@ -63,7 +63,7 @@ class Retrieval:
     #: corrections whose span occurs AND whose context is not contradicted
     #: (auto-applied medium/high; feed the deterministic Layer-B guard).
     exact_corrections: list[MemoryEntry] = field(default_factory=list)
-    #: fuzzy/semantic candidates for prompt injection only (never auto-apply).
+    #: lexical-fuzzy candidates for prompt injection only (never auto-apply).
     surfaced: list[Surfaced] = field(default_factory=list)
     fuzzy_backend: str = FUZZY_BACKEND
 

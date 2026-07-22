@@ -36,7 +36,7 @@ class MemoryHit:
     scope: str
     applied: bool           # exact-match auto-applied vs merely surfaced/injected
     similarity: float = 1.0
-    tier: str = "exact"     # exact | lexical | semantic
+    tier: str = "exact"     # exact | lexical
 
 
 @dataclass(slots=True)

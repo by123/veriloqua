@@ -1,8 +1,8 @@
-"""Layered semantic-equality checker (Tier-2, advisory).
+"""Semantic-equality spot check (Tier-2, advisory).
 
-Order: rejected-string blocklist → (optional) NLI entailment → judge tiebreak.
-Only the blocklist ships in core; the richer tiers are boosters. This is never a
-build gate — the deterministic reject-guard is."""
+Two deterministic layers: a rejected-string blocklist, then a normalized similarity
+ratio against the accepted rendering. Nothing heavier ships or is claimed. This is
+never a build gate — the deterministic reject-guard is."""
 
 from __future__ import annotations
 

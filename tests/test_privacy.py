@@ -63,3 +63,34 @@ def test_no_third_party_guard_blocks_the_free_endpoint():
     b = GoogleFreeBackend(no_third_party=True)
     with pytest.raises(ThirdPartyConsentRequired):
         b.translate("hello", "en", "zh")
+
+
+def test_free_mt_text_travels_in_post_body_not_url():
+    """The source text must never appear in the request URL (proxy/server logs)."""
+    import httpx
+
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["body"] = request.content.decode()
+        return httpx.Response(200, json=[[["你好", "hello", None, None]], None, "en"])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    b = GoogleFreeBackend(client=client)
+    res = b.translate("hello", "en", "zh")
+
+    assert res.text == "你好"
+    assert seen["method"] == "POST"
+    assert "hello" not in seen["url"]          # text is not in the URL
+    assert "hello" in seen["body"]             # it rides in the body
+
+
+def test_free_mt_refuses_oversized_text():
+    from veriloqua.backends.google_free import MAX_FREE_CHARS
+    from veriloqua.errors import VeriloquaError
+
+    b = GoogleFreeBackend()
+    with pytest.raises(VeriloquaError, match="at most"):
+        b.translate("x" * (MAX_FREE_CHARS + 1), "en", "zh")

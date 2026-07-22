@@ -1,15 +1,10 @@
-"""Backend protocols + a tiny registry with entry-point discovery.
-
-Third parties register adapters under these entry-point groups:
-``veriloqua.translation_backends``, ``veriloqua.llm_backends``,
-``veriloqua.embedding_backends``, ``veriloqua.search_backends``,
-``veriloqua.memory_stores``.
-"""
+"""Backend protocols. All I/O crosses one of these; the engine never talks to a
+vendor SDK directly. Alternate backends are wired in explicitly via the
+``Translator(...)`` constructor arguments."""
 
 from __future__ import annotations
 
 from veriloqua.backends.base import (
-    EmbeddingBackend,
     LLMBackend,
     LLMResponse,
     SearchBackend,
@@ -22,6 +17,5 @@ __all__ = [
     "TranslationResult",
     "LLMBackend",
     "LLMResponse",
-    "EmbeddingBackend",
     "SearchBackend",
 ]

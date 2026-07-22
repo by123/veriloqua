@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from veriloqua._norm import normalize
 from veriloqua.memory import guard
@@ -80,7 +80,8 @@ def _check_overfit(entry: MemoryEntry) -> list[str]:
     return []
 
 
-def run_eval(*, replay_dir: str | Path | None = None, suite: str = "all") -> dict[str, Any]:
+def run_eval(*, replay_dir: str | Path | None = None, suite: str = "all",
+             translate_fn: Callable[[str, str], str] | None = None) -> dict[str, Any]:
     cases: list[dict] = []
     probes: list[dict] = []
 
@@ -120,10 +121,18 @@ def run_eval(*, replay_dir: str | Path | None = None, suite: str = "all") -> dic
 
     if suite in ("gold", "all"):
         gold = _read_jsonl(_FIXTURES / "en_zh_gold.jsonl")
-        report["tier2_gold_segments"] = len(gold)
-        report["tier2_note"] = (
-            "advisory only — chrF/COMET/judge quality metric is tracked, never blocks a merge "
-            "(install veriloqua[eval] for chrF)."
-        )
+        if suite == "gold" and translate_fn is not None:
+            # the REAL evaluation: translate every gold segment and score it
+            from veriloqua.eval.gold import run_gold
+
+            report["tier2_gold"] = run_gold(translate_fn=translate_fn, cases=gold)
+        else:
+            reason = (
+                "gold eval translates the gold set through the engine; run "
+                "`vq eval --suite gold` (needs a translation backend)"
+                if translate_fn is None
+                else "suite 'all' runs the deterministic tiers only; use --suite gold"
+            )
+            report["tier2_gold"] = {"ran": False, "segments": len(gold), "reason": reason}
 
     return report

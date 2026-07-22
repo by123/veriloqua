@@ -85,8 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     lk.add_argument("entry_id", type=int)
     lk.add_argument("--scope", default="global")
 
-    ev = sub.add_parser("eval", help="run the deterministic replay / over-fit gate")
+    ev = sub.add_parser("eval", help="run the deterministic replay / over-fit gate; "
+                                     "--suite gold translates the gold set and reports chrF")
     ev.add_argument("--suite", choices=["replay", "gold", "all"], default="all")
+    ev.add_argument("--mode", "-m", choices=["fast", "auto"], default="auto",
+                    help="engine mode used when --suite gold translates the gold set")
 
     sub.add_parser("backends", help="list registered/available backends")
 
@@ -309,10 +312,19 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
     tr = _make_translator(args)
     try:
-        report = run_eval(replay_dir=tr.config.replay_dir, suite=args.suite)
+        translate_fn = None
+        if args.suite == "gold":
+            # the gold fixtures are en→zh; each segment really runs through the engine
+            def translate_fn(text: str, domain: str) -> str:
+                r = tr.translate(text, to="zh", source="en", mode=args.mode, domain=domain)
+                return r.text
+
+        report = run_eval(replay_dir=tr.config.replay_dir, suite=args.suite,
+                          translate_fn=translate_fn)
     finally:
         tr.close()
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    # the deterministic tier gates; the gold quality score is advisory by design
     return 0 if report.get("tier1_passed", True) else 1
 
 

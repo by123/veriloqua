@@ -98,6 +98,7 @@ vq glossary add "New York" "纽约" --from en --to zh --invariant
 vq memory stats | export backup.json | forget <id> | conflicts | purge-log
 vq lock <entry_id> --scope global              # explicit human promotion
 vq eval                                        # deterministic correction-replay / over-fit gate
+vq eval --suite gold                           # translate the gold set, report sentence chrF (advisory)
 vq backends                                    # what's installed / available
 ```
 

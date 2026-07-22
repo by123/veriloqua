@@ -327,7 +327,7 @@ def auto_run(ctx: PipelineContext, *, text: str, src: str, tgt: str, domain: str
              context_brief: str = "") -> TranslationResult:
     if ctx.llm is None:
         raise BackendNotConfigured(
-            "auto mode needs an LLM backend — a logged-in claude/codex CLI or an API key "
+            "auto mode needs an LLM backend — a logged-in claude CLI or an API key "
             "(pip install veriloqua[anthropic] + ANTHROPIC_API_KEY); or use --mode fast"
         )
     notes: list[str] = []

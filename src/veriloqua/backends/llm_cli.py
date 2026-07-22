@@ -1,11 +1,11 @@
-"""Zero-config LLM backend that drives a locally-installed *agent CLI* as a
+"""Zero-config LLM backend that drives the locally-installed Claude Code CLI as a
 subprocess — no API key, no vendor SDK.
 
-If you have Claude Code (`claude`) or Codex (`codex`) installed and logged in, the
-engine runs medium/high by shelling out to it in headless "print" mode and reading
-the answer from stdout. Speed matters here: an agent CLI boots a full agent per call,
-so the preset disables MCP servers, project/user settings, session persistence, and
-slash commands, and caps the run to one turn — a translation needs none of that. This
+If you have Claude Code (`claude`) installed and logged in, the engine runs auto
+mode by shelling out to it in headless "print" mode and reading the answer from
+stdout. Speed matters here: an agent CLI boots a full agent per call, so the preset
+disables MCP servers, project/user settings, session persistence, and slash
+commands, and caps the run to one turn — a translation needs none of that. This
 takes a `claude -p` call from ~24s down to ~8-12s. The translator system prompt is
 passed on the real `--system-prompt` channel (not concatenated into the user text),
 which also avoids the model mistaking it for a prompt-injection.
@@ -29,27 +29,14 @@ _CLAUDE_FAST = [
     "--disable-slash-commands",
 ]
 
-# preset -> how to invoke it.
-#   prompt="stdin": feed the prompt on stdin (safest — no argv parsing of the text)
-#   system_flag:    put the system prompt on its own channel (None → inline it)
+# preset -> how to invoke it. Claude Code is the only supported agent CLI.
 PRESETS: dict[str, dict] = {
     "claude_cli": {
         "bin": "claude",
         "args": _CLAUDE_FAST,
         "model_flag": "--model",
         "system_flag": "--system-prompt",
-        "prompt": "stdin",
-        "aliases": True,               # map model ids → claude aliases (haiku/sonnet/opus)
         "hint": "install Claude Code and run `claude` once to log in",
-    },
-    "codex_cli": {
-        "bin": "codex",
-        "args": ["exec", "--skip-git-repo-check"],
-        "model_flag": "--model",
-        "system_flag": None,           # codex has no system-prompt flag → inline
-        "prompt": "stdin",             # codex exec reads the prompt from stdin
-        "aliases": False,              # Claude aliases (haiku/sonnet) are NOT codex models
-        "hint": "install the Codex CLI and run `codex` once to sign in",
     },
 }
 
@@ -72,7 +59,7 @@ def _model_alias(model: str | None) -> str | None:
 
 
 class CliLLMBackend:
-    name = "cli"  # overridden per instance with the concrete preset (claude_cli/codex_cli)
+    name = "cli"  # overridden per instance with the concrete preset (claude_cli)
 
     def __init__(
         self,
@@ -102,7 +89,7 @@ class CliLLMBackend:
 
     @classmethod
     def detect(cls, *, model: str | None = None) -> CliLLMBackend | None:
-        """Return a backend for the first available agent CLI, or None."""
+        """Return a backend for the Claude Code CLI if it is installed, else None."""
         for preset, spec in PRESETS.items():
             if shutil.which(spec["bin"]):
                 return cls(preset, model=model)
@@ -112,31 +99,17 @@ class CliLLMBackend:
                  effort: str = "high", max_tokens: int = 4096) -> LLMResponse:
         cmd = [self._bin, *self._spec["args"], *self.extra_args]
 
-        # Model selection: an explicit cli_model wins (passed raw). Otherwise map the
-        # per-call model to a CLI alias ONLY for backends whose aliases match (Claude).
-        # For codex, "haiku"/"sonnet" are not valid models, so pass nothing → codex default.
-        alias: str | None
-        if self._model:
-            alias = self._model
-        elif self._spec.get("aliases"):
-            alias = _model_alias(model)
-        else:
-            alias = None
+        # Model selection: an explicit cli_model wins (passed raw); otherwise map the
+        # per-call model id to a Claude-CLI alias (haiku/sonnet/opus).
+        alias = self._model or _model_alias(model)
         if alias:
             cmd += [self._spec["model_flag"], alias]
 
-        system_flag = self._spec.get("system_flag")
-        run_kwargs: dict = {"capture_output": True, "text": True, "timeout": self.timeout}
-        if system_flag:
-            cmd += [system_flag, system]           # system on its own channel
-            payload = user                          # only the user text is the "prompt"
-        else:
-            payload = f"{system}\n\n{user}"         # no system channel → inline it
-
-        if self._spec["prompt"] == "stdin":
-            run_kwargs["input"] = payload
-        else:
-            cmd.append(payload)
+        cmd += [self._spec["system_flag"], system]     # system on its own channel
+        run_kwargs: dict = {
+            "capture_output": True, "text": True, "timeout": self.timeout,
+            "input": user,                             # prompt via stdin, never argv
+        }
 
         try:
             proc = subprocess.run(cmd, **run_kwargs)  # noqa: S603

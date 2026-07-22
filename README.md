@@ -9,9 +9,9 @@ from recurring on exact-span matches in the same context.
 **Zero-config by default.** `pip install veriloqua` and go — **no API keys, no setup**:
 
 - **`fast`** uses Google's public translation endpoint directly (keyless).
-- **`auto`** (the default) runs a tiered LLM cascade through a **locally logged-in agent
-  CLI** — `claude -p` (Claude Code) or `codex exec` (Codex) — as a background subprocess.
-  No `ANTHROPIC_API_KEY`, no SDK. With no LLM available it degrades to the keyless fast path.
+- **`auto`** (the default) runs a tiered LLM cascade through a **locally logged-in
+  Claude Code CLI** (`claude -p`) as a background subprocess. No `ANTHROPIC_API_KEY`,
+  no SDK. With no LLM available it degrades to the keyless fast path.
 
 ```bash
 pip install veriloqua
@@ -20,7 +20,7 @@ pip install veriloqua
 ```python
 import veriloqua
 
-# Zero config: uses your logged-in `claude`/`codex` CLI if present, else keyless Google
+# Zero config: uses your logged-in `claude` CLI if present, else keyless Google
 print(veriloqua.translate("Break a leg!", to="zh"))
 
 tr = veriloqua.Translator()
@@ -135,7 +135,7 @@ Nothing is required. Everything below is optional.
 
 | Key | Purpose |
 |-----|---------|
-| `VERILOQUA_LLM_PROVIDER` | force a backend: `claude_cli` \| `codex_cli` \| `anthropic` \| `openai` (default: auto-detect, agent CLI first) |
+| `VERILOQUA_LLM_PROVIDER` | force a backend: `claude_cli` \| `anthropic` \| `openai` (default: auto-detect, Claude CLI first) |
 | `VERILOQUA_CLI_MODEL` | model to pass to the agent CLI (`claude -p --model …`); default lets the CLI use its own model |
 | `VERILOQUA_TRIAGE_MODEL` / `VERILOQUA_TRANSLATE_MODEL` / `VERILOQUA_DEEP_MODEL` | the three cascade tier models |
 | `VERILOQUA_SDK_MODEL` | default model for API-key SDK backends |
@@ -152,7 +152,7 @@ run up an unbounded bill.
 
 ## Backends
 
-The default LLM path is your **locally logged-in agent CLI** (`claude -p` / `codex exec`) —
+The default LLM path is your **locally logged-in Claude Code CLI** (`claude -p`) —
 nothing to `pip install`, no key. The core install depends only on `httpx`. Everything below
 is an optional alternative or upgrade:
 

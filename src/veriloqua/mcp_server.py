@@ -1,5 +1,5 @@
 """Veriloqua MCP server — exposes the engine to any MCP client (Claude Code,
-Claude Desktop, Codex, Cursor, Zed, …).
+Claude Desktop, Cursor, Zed, …).
 
 Two ways to use it, matching the "who is the translator?" split:
 

@@ -329,7 +329,6 @@ def _cmd_backends(args: argparse.Namespace) -> int:
 
     rows = [
         ("llm/claude_cli", "Claude Code `claude -p`", "yes" if shutil.which("claude") else "install Claude Code + log in"),
-        ("llm/codex_cli", "Codex `codex exec`", "yes" if shutil.which("codex") else "install Codex CLI + sign in"),
         ("translation/google_free", "keyless Google (built-in)", "yes"),
         ("translation/deepl", "DeepL", "yes" if available("deepl") else "pip install veriloqua[deepl]"),
         ("translation/google_cloud", "Google Cloud", "yes" if available("google.cloud.translate") else "pip install veriloqua[google]"),

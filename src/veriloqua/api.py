@@ -69,13 +69,13 @@ class Translator:
         """Resolve an LLM backend with ZERO config where possible.
 
         Order: explicit backend → explicitly-selected provider → auto-detect a local
-        agent CLI (`claude`/`codex`, no API key) → API-key SDK backend → None.
+        agent CLI (`claude`, no API key) → API-key SDK backend → None.
         """
         if self._explicit_llm is not None:
             return self._explicit_llm
 
         provider = self.config.llm_provider
-        if provider in ("claude_cli", "codex_cli"):
+        if provider == "claude_cli":
             from veriloqua.backends.llm_cli import CliLLMBackend
 
             try:
@@ -303,7 +303,7 @@ def translate(text: str, *, to: str, source: str = "auto", mode: str | Mode = "a
               domain: str = "", register: str | None = None, context: str | None = None,
               **overrides: Any) -> TranslationResult | FastResult:
     """One-shot translation. Defaults to ``auto`` (zero config): uses a locally
-    logged-in agent CLI (`claude`/`codex`) when present, otherwise the keyless Google
+    logged-in Claude Code CLI (`claude`) when present, otherwise the keyless Google
     fast path. Force the keyless path with ``mode='fast'``."""
     tr = Translator(**overrides)
     try:

@@ -73,8 +73,8 @@ class Config:
     config_dir: Path = field(default_factory=_config_home)
 
     # --- backends / models ---
-    # "claude_cli" | "codex_cli" | "anthropic" | "openai" | None (auto-detect).
-    # Auto-detect prefers a locally-installed agent CLI (claude/codex) so auto mode
+    # "claude_cli" | "anthropic" | "openai" | None (auto-detect).
+    # Auto-detect prefers a locally-installed Claude Code CLI (claude) so auto mode
     # works with ZERO config and NO API key; API-key SDK backends are the fallback.
     llm_provider: str | None = None
     # The tiered `auto` pipeline uses three models. Over the agent CLI these map to
